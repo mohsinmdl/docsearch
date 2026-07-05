@@ -142,7 +142,20 @@
 <details open>
 <summary><b>Brief</b></summary>
 <p><b>File:</b> <code>~/Library/LaunchAgents/com.mohsin.docsearch.plist</code> (source copy kept in the project folder) &mdash; <code>ProgramArguments = [/usr/bin/python3, /Users/dev/projects/docsearch/docsearch-server.py]</code>, <code>RunAtLoad</code> + <code>KeepAlive</code>, stdout/stderr &rarr; <code>~/Library/Logs/docsearch-server.log</code>. Loaded immediately via <code>launchctl bootstrap gui/$(id -u) &lt;plist&gt;</code>; auto-starts at every login thereafter.</p>
-<p><b>Ops:</b> restart = <code>launchctl kickstart -k gui/$(id -u)/com.mohsin.docsearch</code>; stop for good = <code>launchctl bootout gui/$(id -u)/com.mohsin.docsearch</code>.</p>
+<p><b>Ops:</b> restart = <code>launchctl kickstart -k gui/$(id -u)/com.mohsin.docsearch</code>; stop for good = <code>launchctl bootout gui/$(id -u)/com.mohsin.docsearch</code>; full job state = <code>launchctl print gui/$(id -u)/com.mohsin.docsearch</code>.</p>
+</details>
+<details>
+<summary><b>How it runs at login (the launchd chain)</b></summary>
+<ol>
+  <li><b><code>launchd</code> is macOS&rsquo;s process manager</b> &mdash; PID 1, the first process the kernel starts and the ancestor of everything else. Each logged-in user additionally gets a <b>per-user launchd instance</b>: that&rsquo;s the <code>gui/$(id -u)</code> domain (gui/501) used in the ops commands above.</li>
+  <li><b>At login, the per-user launchd scans <code>~/Library/LaunchAgents/</code></b>, finds <code>com.mohsin.docsearch.plist</code>, and registers it as a job. Automatic &mdash; no Login Items, no shell, no cron.</li>
+  <li><b><code>RunAtLoad=true</code></b> &rarr; start the job immediately when it&rsquo;s loaded, i.e. right at login. Without it the job would sit registered but idle until kicked.</li>
+  <li><b>launchd executes <code>ProgramArguments</code> directly</b>: <code>/usr/bin/python3 /Users/dev/projects/docsearch/docsearch-server.py</code>. <b>No shell in between</b> &mdash; <code>.zshrc</code>, aliases and env vars don&rsquo;t apply, which is why both paths in the plist are absolute (a <code>$HOME</code> reference would fail silently).</li>
+  <li><b><code>KeepAlive=true</code></b> &rarr; launchd babysits the process forever: crash or <code>kill</code> &rarr; respawn (throttled to ~10&nbsp;s). Seen live during setup: the port-conflict crash-loop self-healed the moment the blocking orphan died. Flip side: <code>kill</code> can never stop it permanently &mdash; only <code>launchctl bootout</code> can.</li>
+  <li><b>stdout/stderr</b> &rarr; <code>~/Library/Logs/docsearch-server.log</code> per the plist &mdash; first stop when something&rsquo;s off.</li>
+</ol>
+<p class="small"><b>Note:</b> the <code>launchctl bootstrap</code> run during setup was needed only once &mdash; the plist was created mid-session, after launchd&rsquo;s login scan had already happened. From the next login onward, step 2 picks it up automatically.</p>
+<p class="small"><b>LaunchAgents vs LaunchDaemons:</b> agents (<code>~/Library/LaunchAgents</code>) run <i>per user, at login, as you</i> &mdash; right for docsearch (reads your files, binds a user port). Daemons (<code>/Library/LaunchDaemons</code>) run <i>at boot, before any login, usually as root</i> &mdash; wrong here: no <code>$HOME</code> context, needless privilege. Same plist format, different lifecycle.</p>
 </details>
 </div>
 
