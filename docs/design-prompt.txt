@@ -1,0 +1,19 @@
+Design a single-screen desktop web app called docsearch — a personal, Spotlight-style search page for my operational runbook documents (HTML files) that runs locally at localhost:8377 on my Mac. One screen, light theme, with a dark-mode variant.
+
+Personality: calm, utilitarian, native-macOS. Feels like a system utility, not a website. San Francisco / system font. White background, near-black #222 text, muted gray hairline borders, soft gray panel fills, small 4px corner radii. My runbooks use small colored status chips (soft green with dark-green text, soft amber with brown text) — echo that chip language subtly, e.g. for date badges. No hero images, no illustrations, no gradients, no marketing feel.
+
+Screen layout, top to bottom:
+1. Compact header: the word "docsearch" small and quiet, left-aligned.
+2. The centerpiece: a large centered search field, Spotlight-like — generous height, comfortable font size, placeholder "Search runbooks…", a subtle ⌘K keycap hint inside the right edge of the field. This field owns the page.
+3. A quiet status line: "14 runbooks · newest first".
+4. The results list, full width, one row per document: title (the filename cleaned up, e.g. "claude swap setup", medium weight), beneath it the full path in small gray monospace (e.g. /Users/dev/docs/claude-swap-setup.html), and the modified date right-aligned as a soft chip (e.g. "Jul 5, 03:49"). Clear hover state and a distinct keyboard-selected state (I navigate with ↑/↓ and open with Enter).
+
+Use this realistic content in the mock: rows for "claude swap setup" (/Users/dev/docs/…, Jul 5), "doc search setup" (/Users/dev/docs/…, Jul 5), "main account handover", "developer onboarding tasks", "slack rocketchat mirror design", "aws member account migration runbook", "aws member account migration feasibility" (all /Users/dev/projects/rocketchat-push-gateway/docs/…, June dates).
+
+Also design these three states as variants:
+- Empty search results: "No runbooks match 'xyz'" with a one-line hint: "Search looks inside document content, not just names."
+- Server offline: a quiet inline banner — "docsearch server isn't responding — check launchctl list | grep docsearch" — not a scary error page.
+- Initial/dashboard state: empty search field showing ALL runbooks newest-first (the page doubles as a "recent runbooks" dashboard).
+
+Desktop-first (~1100px), but it should degrade gracefully to a ~600px window. No login, no navigation, no footer — this is a single-purpose local tool.
+

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HTML Runbook Search &mdash; Browser UI (docsearch-web) &mdash; Design &amp; Execution Runbook</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 20px; color: #222; line-height: 1.45; }
+  h1 { border-bottom: 2px solid #333; padding-bottom: 6px; }
+  h2 { border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 32px; }
+  .meta { background: #f4f4f4; border: 1px solid #ddd; padding: 10px 14px; border-radius: 4px; margin: 12px 0; font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 14px; }
+  th, td { border: 1px solid #bbb; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  .status { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; letter-spacing: 0.5px; white-space: nowrap; }
+  .pending      { background: #e8e8e8; color: #555; }
+  .awaiting     { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+  .in-progress  { background: #cce5ff; color: #004085; border: 1px solid #b8daff; }
+  .done         { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+  .blocked      { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+  .risk-high    { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; font-weight: bold; }
+  .risk-med     { background: #ffe5b4; color: #7a4a00; border: 1px solid #ffd180; font-weight: bold; }
+  .risk-low     { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; font-weight: bold; }
+  .portable     { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; font-weight: bold; }
+  details { margin: 4px 0; }
+  details summary { cursor: pointer; padding: 2px 0; }
+  code, pre { background: #f6f6f6; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+  pre { padding: 8px 12px; overflow-x: auto; }
+  .item-card { border: 1px solid #ddd; border-radius: 4px; padding: 12px; margin: 10px 0; background: #fafafa; }
+  .item-card.high { border-left: 4px solid #d9534f; }
+  .item-card.med { border-left: 4px solid #f0ad4e; }
+  .item-card.low { border-left: 4px solid #ffc107; }
+  .item-card.ok { border-left: 4px solid #5cb85c; }
+  .small { font-size: 12px; color: #666; }
+</style>
+</head>
+<body>
+
+<h1>HTML Runbook Search &mdash; Browser UI (docsearch-web)</h1>
+
+<div class="meta">
+  <b>Related:</b> <a href="doc-search-setup.html">doc-search-setup.html</a> (the terminal <code>docsearch</code> + Smart Folder this builds on) &middot;
+  <a href="claude-swap-setup.html">claude-swap-setup.html</a> (style/workflow sibling)<br>
+  <b>Context:</b> <code>docsearch</code> (zsh) finds HTML runbooks via Spotlight (<code>mdfind "kind:html &hellip;"</code>) restricted to paths containing <code>/docs/</code>. Requested 2026-07-05: the <b>same search from a web browser</b> &mdash; a page with a search bar.<br>
+  <b>Purpose:</b> Design + execution runbook for a tiny always-on localhost web UI that runs the identical query. Served as the review artifact pre-build; now the as-built record.<br>
+  <b>Scope:</b> One Python-stdlib server file, one LaunchAgent, one zsh alias, doc/memory updates. No new packages, no cloud, nothing listening beyond 127.0.0.1.<br>
+  <b>Project folder (added at build):</b> <code>~/projects/docsearch/</code> &mdash; <code>docsearch-server.py</code>, <code>index.html</code> (vanilla translation of the Claude Design mock), <code>com.mohsin.docsearch.plist</code> (installed copy in <code>~/Library/LaunchAgents/</code>), plus the raw Claude Design export + extracted markup for reference.<br>
+  <b>Created:</b> 2026-07-05 &middot; <span class="status done">BUILT &amp; VERIFIED 2026-07-05 &mdash; live at http://localhost:8377</span>
+</div>
+
+<h2>Status legend</h2>
+<p>
+  <span class="status pending">PENDING</span> Not started &middot;
+  <span class="status awaiting">AWAITING REVIEW</span> Needs your go-ahead &middot;
+  <span class="status done">DONE</span> Completed &amp; verified &middot;
+  <span class="status risk-med">MED</span> / <span class="status risk-low">LOW</span> Risk if mishandled &middot;
+  <span class="status portable">STDLIB</span> No dependencies added
+</p>
+
+<h2>Headline verdict</h2>
+<p><b>Trivially feasible, one structural fact drives the whole design:</b> a browser page cannot execute shell commands, so &ldquo;a search bar that runs docsearch&rdquo; requires a <b>local server process</b> that runs <code>mdfind</code> on the page&rsquo;s behalf. Everything else follows from keeping that server as small and safe as possible:</p>
+<ol>
+  <li><b>Single file, Python 3 stdlib only</b> (<code>/usr/bin/python3</code> 3.9.6, verified present) &mdash; no pip, no node, nothing to update. ~120 lines.</li>
+  <li><b>Bound to 127.0.0.1 only</b> &mdash; unreachable from the network by construction. Port <b>8377</b> verified free.</li>
+  <li><b>Results open in the browser.</b> Browsers block <code>file://</code> links from http pages, so the server also <i>serves</i> the matched doc (with strict path guards). Clicking a result renders the runbook directly &mdash; arguably nicer than the terminal.</li>
+</ol>
+
+<h2>Decisions (locked 2026-07-05)</h2>
+<table>
+  <tr><th style="width:160px">Area</th><th>Decision</th><th>Why</th></tr>
+  <tr>
+    <td><b>Run mode</b></td>
+    <td><b>Always-on LaunchAgent</b> (<code>RunAtLoad</code> + <code>KeepAlive</code>), label <code>com.mohsin.docsearch</code>.</td>
+    <td>Chosen over on-demand at planning Q&amp;A: <code>http://localhost:8377</code> just works, incl. after reboot. Cost: one idle ~15&nbsp;MB python process.</td>
+  </tr>
+  <tr>
+    <td><b>Query semantics</b></td>
+    <td><b>Identical to <code>docsearch</code></b>: <code>mdfind -onlyin ~ "kind:html &lt;q&gt;"</code> &rarr; keep <code>/docs/</code> paths &rarr; same exclude pattern &rarr; newest first. Empty query lists <i>all</i> runbooks.</td>
+    <td>One mental model in both places; the empty-query listing makes the page double as a &ldquo;recent runbooks&rdquo; dashboard.</td>
+  </tr>
+  <tr>
+    <td><b>Server tech</b></td>
+    <td><b>Python 3 stdlib</b> <code>http.server</code>, single file at <code>~/projects/docsearch/docsearch-server.py</code>.</td>
+    <td>Continues the built-ins-only philosophy from <a href="doc-search-setup.html">doc-search-setup</a>. No dependency ever breaks it; readable in one screen.</td>
+  </tr>
+  <tr>
+    <td><b>Port / binding</b></td>
+    <td><b>127.0.0.1:8377</b> (verified free 2026-07-05).</td>
+    <td>Localhost-only = zero network exposure. 8377 is unclaimed by common tools; change is a one-line edit.</td>
+  </tr>
+  <tr>
+    <td><b>Opening results</b></td>
+    <td>Server <b>serves the doc</b> at <code>/view?p=&lt;path&gt;</code> with path guards (below).</td>
+    <td><code>file://</code> hrefs are blocked from http pages; serving is the standard clean workaround and keeps docs rendering with one click.</td>
+  </tr>
+</table>
+
+<h2>Summary &mdash; component by component</h2>
+<table>
+  <tr><th style="width:40px">#</th><th>Component</th><th style="width:100px">Type</th><th style="width:90px">Risk</th><th style="width:110px">Status</th><th>One-line verdict</th></tr>
+  <tr><td>1</td><td><a href="#item-1">Server script <code>~/projects/docsearch/docsearch-server.py</code></a></td><td><span class="status portable">STDLIB</span></td><td><span class="status risk-low">LOW</span></td><td><span class="status done">DONE</span></td><td>Serves <code>index.html</code> + <code>/search</code> JSON + guarded <code>/view</code>.</td></tr>
+  <tr><td>2</td><td><a href="#item-2">Path-guard security on <code>/view</code></a></td><td>design</td><td><span class="status risk-med">MED</span></td><td><span class="status done">DONE</span></td><td>Verified: <code>/etc/hosts</code> and <code>../</code> traversal both 403.</td></tr>
+  <tr><td>3</td><td><a href="#item-3">LaunchAgent <code>com.mohsin.docsearch</code></a></td><td>launchd</td><td><span class="status risk-low">LOW</span></td><td><span class="status done">DONE</span></td><td>Running (survived <code>kickstart -k</code>); logs to <code>~/Library/Logs</code>.</td></tr>
+  <tr><td>4</td><td><a href="#item-4"><code>docweb</code> alias</a></td><td>zsh</td><td><span class="status risk-low">LOW</span></td><td><span class="status done">DONE</span></td><td>One-word way to open the page from the terminal.</td></tr>
+  <tr><td>5</td><td><a href="#item-5">Docs + memory updates</a></td><td>docs</td><td><span class="status risk-low">LOW</span></td><td><span class="status done">DONE</span></td><td>Cross-linked from doc-search-setup.html; memory updated.</td></tr>
+</table>
+
+<hr>
+
+<h2>Item details</h2>
+
+<div class="item-card ok" id="item-1">
+<h3>1. Server script <span class="status portable">STDLIB</span> <span class="status done">DONE 2026-07-05</span></h3>
+<details open>
+<summary><b>Brief</b></summary>
+<p><b>File:</b> <code>~/projects/docsearch/docsearch-server.py</code> (location moved from <code>~/docs</code> to a project folder at build time, 2026-07-05) &mdash; <code>ThreadingHTTPServer(("127.0.0.1", 8377), &hellip;)</code>. The page lives separately at <code>~/projects/docsearch/index.html</code> and is read per-request, so design tweaks don&rsquo;t need a server restart. Three routes:</p>
+<ul>
+  <li><code>GET /</code> &mdash; embedded single-page UI: autofocus search bar, result rows (title-ish filename, full path, modified date), styled like these runbooks. On load with an empty query it lists <b>all</b> runbooks newest-first.</li>
+  <li><code>GET /search?q=&lt;words&gt;</code> &mdash; runs <code>mdfind -onlyin $HOME "kind:html &lt;q&gt;"</code> (or the all-HTML content-type query when <code>q</code> is empty), applies the <b>same</b> <code>/docs/</code> include + exclude pattern as the zsh function, sorts by mtime desc, returns JSON <code>[{path, mtime}]</code>. The query string is passed to <code>mdfind</code> as a single argv element (no shell interpolation).</li>
+  <li><code>GET /view?p=&lt;path&gt;</code> &mdash; serves the matched doc so results open with one click (see item 2 for guards).</li>
+</ul>
+<p><b>Debounced live search</b> (~250&nbsp;ms) in the page JS, so results update as you type without hammering <code>mdfind</code>.</p>
+</details>
+</div>
+
+<div class="item-card med" id="item-2">
+<h3>2. Path-guard security on <code>/view</code> <span class="status risk-med">MED</span> <span class="status done">DONE &mdash; guards verified 2026-07-05</span></h3>
+<details open>
+<summary><b>Brief</b></summary>
+<p><b>Why this is the one MED:</b> a file-serving endpoint is a directory-traversal foot-gun if unguarded. Guards (all must pass, else 403):</p>
+<ul>
+  <li><code>os.path.realpath(p)</code> must be <b>under <code>$HOME</code></b> (prefix check after resolution &mdash; defeats <code>../</code> and symlink tricks);</li>
+  <li>must end <code>.html</code>;</li>
+  <li>must contain <code>/docs/</code>;</li>
+  <li>must pass the same exclude pattern as search.</li>
+</ul>
+<p>Net: the endpoint can serve exactly the set of files the search can return &mdash; nothing else. Combined with the 127.0.0.1 bind, exposure is limited to processes already running as you on this Mac (which could read those files anyway).</p>
+</details>
+</div>
+
+<div class="item-card ok" id="item-3">
+<h3>3. LaunchAgent <span class="status risk-low">LOW</span> <span class="status done">DONE 2026-07-05</span></h3>
+<details open>
+<summary><b>Brief</b></summary>
+<p><b>File:</b> <code>~/Library/LaunchAgents/com.mohsin.docsearch.plist</code> (source copy kept in the project folder) &mdash; <code>ProgramArguments = [/usr/bin/python3, /Users/dev/projects/docsearch/docsearch-server.py]</code>, <code>RunAtLoad</code> + <code>KeepAlive</code>, stdout/stderr &rarr; <code>~/Library/Logs/docsearch-server.log</code>. Loaded immediately via <code>launchctl bootstrap gui/$(id -u) &lt;plist&gt;</code>; auto-starts at every login thereafter.</p>
+<p><b>Ops:</b> restart = <code>launchctl kickstart -k gui/$(id -u)/com.mohsin.docsearch</code>; stop for good = <code>launchctl bootout gui/$(id -u)/com.mohsin.docsearch</code>.</p>
+</details>
+</div>
+
+<div class="item-card ok" id="item-4">
+<h3>4. <code>docweb</code> alias <span class="status risk-low">LOW</span> <span class="status done">DONE 2026-07-05</span></h3>
+<details open>
+<summary><b>Brief</b></summary>
+<p><code>alias docweb='open http://localhost:8377'</code> in <code>~/.zshrc</code>, placed next to <code>docsearch</code>. Terminal search stays <code>docsearch</code>; browser search becomes <code>docweb</code> (or a bookmark).</p>
+</details>
+</div>
+
+<div class="item-card ok" id="item-5">
+<h3>5. Docs + memory updates <span class="status risk-low">LOW</span> <span class="status done">DONE 2026-07-05</span></h3>
+<details open>
+<summary><b>Brief</b></summary>
+<p>Add the web UI row to <a href="doc-search-setup.html">doc-search-setup.html</a>&rsquo;s Quick reference (cross-link both ways); flip this doc&rsquo;s chips as steps complete; update the <code>html-runbook-search</code> memory (server path, port, LaunchAgent label, <code>docweb</code>).</p>
+</details>
+</div>
+
+<hr>
+
+<h2>What gets <i>worse</i> (the honest part)</h2>
+<ol>
+  <li><b>A permanently running background process.</b> Until now the search stack was zero-resident (Spotlight was already running anyway). This adds one python process (~15&nbsp;MB RSS, idle ~0% CPU) that exists whether or not you use the page. On-demand mode was declined, but the rollback is one <code>launchctl bootout</code>.</li>
+  <li><b>KeepAlive can loop.</b> If the script is ever edited into a syntax error, launchd will respawn it repeatedly (throttled to ~10&nbsp;s). The log file makes this obvious, but it&rsquo;s a failure mode the pure-zsh setup didn&rsquo;t have.</li>
+  <li><b>A claimed port.</b> 8377 is now spoken for on this machine; anything else wanting it will fail confusingly until you remember this server.</li>
+  <li><b>Two implementations of one query.</b> The include/exclude patterns now live in <code>~/.zshrc</code> <i>and</i> the server. If you tweak one, tweak the other &mdash; noted in both files. (Deliberate trade: importing zsh from python or vice-versa would be far uglier than 4 duplicated regex lines.)</li>
+  <li><b>Same Spotlight dependency.</b> Anything Spotlight can&rsquo;t see (Privacy-listed folders, seconds-old files) is invisible here too &mdash; the web UI doesn&rsquo;t fix that, it inherits it.</li>
+</ol>
+
+<h2>Recommended sequence (executed 2026-07-05)</h2>
+<ol>
+  <li><b>Design in Claude Design</b> &mdash; user generated + exported; raw export kept at <code>~/projects/docsearch/design-claude-export.html</code>. Export uses Claude Design&rsquo;s own component framework (<code>sc-if</code>/<code>sc-for</code>/DCLogic), so it was <b>translated to vanilla HTML/CSS/JS</b> at <code>~/projects/docsearch/index.html</code> &mdash; palette (incl. dark mode + Auto/Light/Dark switcher, Ctrl+Shift+L), layout, chips and keyboard behavior preserved verbatim; mock data replaced with the real <code>/search</code> fetch (250&nbsp;ms debounce). <span class="status done">DONE</span></li>
+  <li>Server written; foreground smoke-test passed before launchd wiring. <span class="status done">DONE</span></li>
+  <li>LaunchAgent bootstrapped; survived <code>kickstart -k</code>. <b>Real-world note:</b> the predicted KeepAlive crash-loop happened at first bootstrap (port held by the orphaned smoke-test process) &mdash; log showed <code>Errno 48</code>, killing the orphan resolved it; launchd respawned cleanly within ~10&nbsp;s. <span class="status done">DONE</span></li>
+  <li><code>docweb</code> added to <code>~/.zshrc</code>. <span class="status done">DONE</span></li>
+  <li>Verification below all green. <span class="status done">DONE</span></li>
+  <li>User: run <code>docweb</code> (or open <code>http://localhost:8377</code>), search, click a result, try the theme switcher. <span class="status awaiting">USER CHECK</span></li>
+</ol>
+
+<h2>Verification (run 2026-07-05)</h2>
+<table>
+  <tr><th>Check</th><th>Command</th><th>Expected</th><th style="width:90px">Result</th></tr>
+  <tr><td>Job running</td><td><code>launchctl list | grep docsearch</code></td><td>PID present, status 0</td><td><span class="status done">PASS</span></td></tr>
+  <tr><td>Search parity</td><td><code>curl 'localhost:8377/search?q=cswap'</code></td><td>JSON incl. <code>claude-swap-setup.html</code> &mdash; same as <code>docsearch cswap</code></td><td><span class="status done">PASS</span></td></tr>
+  <tr><td>Dashboard mode</td><td><code>curl 'localhost:8377/search?q='</code></td><td>All runbooks, newest first</td><td><span class="status done">PASS (20)</span></td></tr>
+  <tr><td>View works</td><td><code>curl 'localhost:8377/view?p=/Users/dev/docs/claude-swap-setup.html'</code></td><td>HTML of the runbook</td><td><span class="status done">PASS</span></td></tr>
+  <tr><td>Guards hold</td><td><code>curl -i 'localhost:8377/view?p=/etc/hosts'</code> (and a <code>../</code> attempt)</td><td><b>403</b> both</td><td><span class="status done">PASS</span></td></tr>
+  <tr><td>Localhost only</td><td><code>lsof -nP -i :8377</code></td><td>Bound to <code>127.0.0.1</code>, not <code>*</code></td><td><span class="status done">PASS</span></td></tr>
+  <tr><td>Survives restart</td><td><code>launchctl kickstart -k gui/$UID/com.mohsin.docsearch</code></td><td>Back within seconds</td><td><span class="status done">PASS</span></td></tr>
+</table>
+
+<h2>Rollback</h2>
+<pre>
+launchctl bootout gui/$(id -u)/com.mohsin.docsearch
+rm ~/Library/LaunchAgents/com.mohsin.docsearch.plist
+rm -rf ~/projects/docsearch          # server + page + design files
+# remove the docweb alias line (and its comment) from ~/.zshrc
+</pre>
+<p class="small">Terminal <code>docsearch</code> and the Smart Folder are untouched by rollback &mdash; the web UI is purely additive.</p>
+
+<hr>
+
+<p class="small"><b>How to use this doc:</b> Originally the review artifact for this build; as of 2026-07-05 everything is <span class="status done">DONE</span> and live at <a href="http://localhost:8377">localhost:8377</a> (open with <code>docweb</code>). The <b>Decisions</b> table records what was chosen and why; <b>What gets worse</b> is still worth a re-read (the KeepAlive crash-loop it predicted actually happened during bootstrap and is documented in the sequence). Ops one-liners live in item 3; teardown in <b>Rollback</b>. Remember the duplicated include/exclude filters: change them in BOTH <code>~/.zshrc</code> and <code>docsearch-server.py</code>.</p>
+
+</body>
+</html>

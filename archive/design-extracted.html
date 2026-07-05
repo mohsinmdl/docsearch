@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="5e8df4d3-d208-4e6b-a24f-c65307c3e82c"></script>
+</head>
+<body>
+
+<x-dc>
+<helmet>
+<style>
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, sans-serif; -webkit-font-smoothing: antialiased; }
+  :root {
+    --bg:#FFFFFF; --text:#222222; --text-sub:#5A5A5E; --text-dim:#8A8A8E;
+    --line:#D9D9DC; --line-soft:#F0F0F2;
+    --field-bg:#F6F6F7; --field-border:#D9D9DC; --field-border-focus:#A9A9AE; --key-bg:#FFFFFF;
+    --sel-bg:#EDF3FC; --row-hover:#F4F4F5; --sel-hint:#5A78A8;
+    --chip-green-bg:#DFF2E1; --chip-green-fg:#1E6B33;
+    --chip-amber-bg:#FBF0DC; --chip-amber-fg:#7A4E12;
+    --banner-bg:#FBF0DC; --banner-border:#EBD9B8; --banner-fg:#7A4E12; --banner-sub:#8A6A38; --banner-code-bg:rgba(122,78,18,0.08);
+    --seg-track:#F0F0F2; --seg-sel-bg:#FFFFFF;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#1E1E20; --text:#E8E8EA; --text-sub:#A0A0A6; --text-dim:#7C7C84;
+      --line:#3A3A3E; --line-soft:#2A2A2E;
+      --field-bg:#29292D; --field-border:#3E3E44; --field-border-focus:#5A5A62; --key-bg:#2E2E33;
+      --sel-bg:#2C3542; --row-hover:#28282C; --sel-hint:#8FAEDC;
+      --chip-green-bg:rgba(48,209,88,0.16); --chip-green-fg:#8CD9A0;
+      --chip-amber-bg:rgba(230,180,80,0.14); --chip-amber-fg:#D9BC85;
+      --banner-bg:rgba(230,180,80,0.12); --banner-border:rgba(230,180,80,0.30); --banner-fg:#D9BC85; --banner-sub:#C0A878; --banner-code-bg:rgba(230,180,80,0.12);
+      --seg-track:#2A2A2E; --seg-sel-bg:#3E3E44;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#FFFFFF; --text:#222222; --text-sub:#5A5A5E; --text-dim:#8A8A8E;
+    --line:#D9D9DC; --line-soft:#F0F0F2;
+    --field-bg:#F6F6F7; --field-border:#D9D9DC; --field-border-focus:#A9A9AE; --key-bg:#FFFFFF;
+    --sel-bg:#EDF3FC; --row-hover:#F4F4F5; --sel-hint:#5A78A8;
+    --chip-green-bg:#DFF2E1; --chip-green-fg:#1E6B33;
+    --chip-amber-bg:#FBF0DC; --chip-amber-fg:#7A4E12;
+    --banner-bg:#FBF0DC; --banner-border:#EBD9B8; --banner-fg:#7A4E12; --banner-sub:#8A6A38; --banner-code-bg:rgba(122,78,18,0.08);
+    --seg-track:#F0F0F2; --seg-sel-bg:#FFFFFF;
+  }
+  :root[data-theme="dark"] {
+    --bg:#1E1E20; --text:#E8E8EA; --text-sub:#A0A0A6; --text-dim:#7C7C84;
+    --line:#3A3A3E; --line-soft:#2A2A2E;
+    --field-bg:#29292D; --field-border:#3E3E44; --field-border-focus:#5A5A62; --key-bg:#2E2E33;
+    --sel-bg:#2C3542; --row-hover:#28282C; --sel-hint:#8FAEDC;
+    --chip-green-bg:rgba(48,209,88,0.16); --chip-green-fg:#8CD9A0;
+    --chip-amber-bg:rgba(230,180,80,0.14); --chip-amber-fg:#D9BC85;
+    --banner-bg:rgba(230,180,80,0.12); --banner-border:rgba(230,180,80,0.30); --banner-fg:#D9BC85; --banner-sub:#C0A878; --banner-code-bg:rgba(230,180,80,0.12);
+    --seg-track:#2A2A2E; --seg-sel-bg:#3E3E44;
+  }
+</style>
+</helmet>
+
+<div style="min-height:100vh; background:var(--bg); display:flex; flex-direction:column">
+  <header style="padding:10px 24px; border-bottom:1px solid var(--line-soft); display:flex; align-items:center; justify-content:space-between">
+    <span style="font-size:13px; font-weight:500; color:var(--text-sub); letter-spacing:0.2px">docsearch</span>
+    <div title="Appearance — Ctrl+Shift+L toggles light/dark" style="display:flex; gap:2px; background:var(--seg-track); border-radius:5px; padding:2px">
+      <sc-for list="{{ themeOpts }}" as="t" hint-placeholder-count="3">
+        <span onclick="{{ t.set }}" style="font-size:11px; font-weight:500; color:{{ t.fg }}; background:{{ t.bg }}; border-radius:3px; padding:3px 9px; cursor:default; user-select:none">{{ t.label }}</span>
+      </sc-for>
+    </div>
+  </header>
+
+  <div style="padding:36px 24px 0; display:flex; justify-content:center">
+    <div style="position:relative; width:100%; max-width:720px">
+      <input type="text" placeholder="Search runbooks…" value="{{ q }}" onchange="{{ onQ }}" ref="{{ inputRef }}" autofocus="{{ true }}" style="width:100%; box-sizing:border-box; height:56px; padding:0 84px 0 20px; font-size:19px; font-family:inherit; color:var(--text); background:var(--field-bg); border:1px solid var(--field-border); border-radius:6px; outline:none" style-focus="border:1px solid var(--field-border-focus); background:var(--bg)">
+      <sc-if value="{{ keycapHint }}" hint-placeholder-val="{{ true }}">
+        <span style="position:absolute; right:14px; top:50%; transform:translateY(-50%); font-size:11px; color:var(--text-dim); background:var(--key-bg); border:1px solid var(--field-border); border-radius:4px; padding:3px 7px; pointer-events:none">⌘K</span>
+      </sc-if>
+    </div>
+  </div>
+
+  <sc-if value="{{ offline }}" hint-placeholder-val="{{ false }}">
+    <div style="padding:16px 24px 0; display:flex; justify-content:center">
+      <div style="width:100%; max-width:720px; box-sizing:border-box; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; background:var(--banner-bg); border:1px solid var(--banner-border); border-radius:4px; padding:10px 14px">
+        <span style="font-size:12px; font-weight:500; color:var(--banner-fg); flex-shrink:0">docsearch server isn’t responding</span>
+        <span style="font-size:12px; color:var(--banner-sub)">— check <code style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:11px; background:var(--banner-code-bg); border-radius:3px; padding:1px 5px">launchctl list | grep docsearch</code></span>
+      </div>
+    </div>
+  </sc-if>
+
+  <div style="padding:16px 24px 8px; display:flex; justify-content:center">
+    <span style="width:100%; max-width:720px; font-size:12px; color:var(--text-dim)">{{ status }}</span>
+  </div>
+
+  <div style="padding:0 24px 28px; display:flex; justify-content:center">
+    <div style="width:100%; max-width:720px; display:flex; flex-direction:column">
+      <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:56px 0; display:flex; flex-direction:column; align-items:center; gap:8px">
+          <div style="font-size:14px; font-weight:500; color:var(--text-sub)">{{ emptyTitle }}</div>
+          <div style="font-size:12px; color:var(--text-dim)">Search looks inside document content, not just names.</div>
+        </div>
+      </sc-if>
+      <sc-for list="{{ rows }}" as="r" hint-placeholder-count="7">
+        <div onclick="{{ r.open }}" style="display:flex; align-items:center; gap:16px; padding:10px 12px; margin:0 -12px; border-radius:4px; background:{{ r.bg }}; cursor:default; border-bottom:1px solid var(--line-soft)" style-hover="background:var(--row-hover)">
+          <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px">
+            <div style="font-size:14px; font-weight:500; color:var(--text)">{{ r.title }}</div>
+            <div style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:11px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.path }}</div>
+          </div>
+          <sc-if value="{{ r.selected }}" hint-placeholder-val="{{ false }}">
+            <span style="font-size:11px; color:var(--sel-hint); flex-shrink:0">↩ open</span>
+          </sc-if>
+          <span style="flex-shrink:0; font-size:11px; font-weight:500; padding:3px 8px; border-radius:4px; background:{{ r.chipBg }}; color:{{ r.chipFg }}">{{ r.date }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: 1100, &quot;height&quot;: 760 },
+  &quot;offline&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;States&quot; },
+  &quot;keycapHint&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Search field&quot; }
+}">
+class Component extends DCLogic {
+  state = { q: '', sel: 0, theme: (function () { try { return localStorage.getItem('docsearch-theme') || 'auto'; } catch (e) { return 'auto'; } })() };
+  inputRef = React.createRef();
+
+  // Replace with a fetch to /search?q=… when wiring to the real server.
+  docs() {
+    const P = '/Users/dev/projects/rocketchat-push-gateway/docs/';
+    return [
+      { title: 'claude swap setup', path: '/Users/dev/docs/claude-swap-setup.html', date: 'Jul 5, 03:49', recent: true },
+      { title: 'doc search setup', path: '/Users/dev/docs/doc-search-setup.html', date: 'Jul 5, 02:12', recent: true },
+      { title: 'main account handover', path: P + 'main-account-handover.html', date: 'Jun 30, 14:21' },
+      { title: 'developer onboarding tasks', path: P + 'developer-onboarding-tasks.html', date: 'Jun 27, 09:03' },
+      { title: 'slack rocketchat mirror design', path: P + 'slack-rocketchat-mirror-design.html', date: 'Jun 24, 16:45' },
+      { title: 'aws member account migration runbook', path: P + 'aws-member-account-migration-runbook.html', date: 'Jun 19, 11:30' },
+      { title: 'aws member account migration feasibility', path: P + 'aws-member-account-migration-feasibility.html', date: 'Jun 17, 10:08' },
+    ];
+  }
+
+  filtered() {
+    const q = this.state.q.trim().toLowerCase();
+    if (!q) return this.docs();
+    return this.docs().filter(d => d.title.toLowerCase().includes(q) || d.path.toLowerCase().includes(q));
+  }
+
+  openDoc(d) {
+    // Wire point: real app opens the rendered doc via the /view endpoint.
+    window.open('/view?path=' + encodeURIComponent(d.path), '_blank');
+  }
+
+  applyTheme(t) {
+    if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t);
+  }
+
+  setTheme(t) {
+    try { localStorage.setItem('docsearch-theme', t); } catch (e) {}
+    this.applyTheme(t);
+    this.setState({ theme: t });
+  }
+
+  componentDidMount() {
+    this.applyTheme(this.state.theme);
+    this.onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (this.inputRef.current) this.inputRef.current.focus();
+        return;
+      }
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        const t = this.state.theme;
+        const effective = t === 'auto'
+          ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+          : t;
+        this.setTheme(effective === 'dark' ? 'light' : 'dark');
+        return;
+      }
+      const list = this.filtered();
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        this.setState(s => ({ sel: Math.min(s.sel + 1, Math.max(list.length - 1, 0)) }));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.setState(s => ({ sel: Math.max(s.sel - 1, 0) }));
+      } else if (e.key === 'Enter') {
+        if (list[this.state.sel]) this.openDoc(list[this.state.sel]);
+      } else if (e.key === 'Escape') {
+        this.setState({ q: '', sel: 0 });
+      }
+    };
+    window.addEventListener('keydown', this.onKey);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this.onKey);
+  }
+
+  renderVals() {
+    const q = this.state.q;
+    const list = this.filtered();
+    const sel = Math.min(this.state.sel, Math.max(list.length - 1, 0));
+    const offline = this.props.offline ?? false;
+
+    const rows = list.map((d, i) => ({
+      ...d,
+      selected: i === sel,
+      bg: i === sel ? 'var(--sel-bg)' : 'transparent',
+      chipBg: d.recent ? 'var(--chip-green-bg)' : 'var(--chip-amber-bg)',
+      chipFg: d.recent ? 'var(--chip-green-fg)' : 'var(--chip-amber-fg)',
+      open: () => this.openDoc(d),
+    }));
+
+    const status = offline
+      ? this.docs().length + ' runbooks · last indexed Jul 5, 03:49'
+      : q.trim()
+        ? list.length + (list.length === 1 ? ' match' : ' matches') + ' for \u201C' + q.trim() + '\u201D'
+        : this.docs().length + ' runbooks · newest first';
+
+    return {
+      q,
+      onQ: (e) => this.setState({ q: e.target.value, sel: 0 }),
+      inputRef: this.inputRef,
+      rows,
+      status,
+      isEmpty: list.length === 0,
+      emptyTitle: 'No runbooks match \u201C' + q.trim() + '\u201D',
+      offline,
+      keycapHint: this.props.keycapHint ?? true,
+      themeOpts: ['auto', 'light', 'dark'].map(t => ({
+        label: t === 'auto' ? 'Auto' : t === 'light' ? 'Light' : 'Dark',
+        bg: this.state.theme === t ? 'var(--seg-sel-bg)' : 'transparent',
+        fg: this.state.theme === t ? 'var(--text)' : 'var(--text-dim)',
+        set: () => this.setTheme(t),
+      })),
+    };
+  }
+}
+</script>
+
+
+</body></html>
