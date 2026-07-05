@@ -70,7 +70,7 @@
   <tr>
     <td><b>Run mode</b></td>
     <td><b>Always-on LaunchAgent</b> (<code>RunAtLoad</code> + <code>KeepAlive</code>), label <code>com.mohsin.docsearch</code>.</td>
-    <td>Chosen over on-demand at planning Q&amp;A: <code>http://localhost:8377</code> just works, incl. after reboot. Cost: one idle ~15&nbsp;MB python process.</td>
+    <td>Chosen over on-demand at planning Q&amp;A: <code>http://localhost:8377</code> just works, incl. after reboot. Cost: one idle python process (measured ~11&ndash;12&nbsp;MB &mdash; see footprint block in item 3).</td>
   </tr>
   <tr>
     <td><b>Query semantics</b></td>
@@ -157,6 +157,17 @@
 <p class="small"><b>Note:</b> the <code>launchctl bootstrap</code> run during setup was needed only once &mdash; the plist was created mid-session, after launchd&rsquo;s login scan had already happened. From the next login onward, step 2 picks it up automatically.</p>
 <p class="small"><b>LaunchAgents vs LaunchDaemons:</b> agents (<code>~/Library/LaunchAgents</code>) run <i>per user, at login, as you</i> &mdash; right for docsearch (reads your files, binds a user port). Daemons (<code>/Library/LaunchDaemons</code>) run <i>at boot, before any login, usually as root</i> &mdash; wrong here: no <code>$HOME</code> context, needless privilege. Same plist format, different lifecycle.</p>
 </details>
+<details>
+<summary><b>Measured footprint (2026-07-05, after 40 min running)</b></summary>
+<table>
+  <tr><th style="width:180px">Metric</th><th style="width:140px">Value</th><th>Meaning</th></tr>
+  <tr><td>RSS / physical footprint</td><td><b>~11&ndash;12&nbsp;MB</b></td><td>Actual RAM held (<code>ps</code> RSS 11,600&nbsp;KB; <code>footprint</code> 12&nbsp;MB) &mdash; ~0.1% of system memory, under the ~15&nbsp;MB estimate in the Decisions table. Scale: a single Chrome tab is typically 10&ndash;30&times; more.</td></tr>
+  <tr><td>CPU</td><td><b>0.0%</b></td><td>Fully idle between requests (blocked on the socket); only works for the ~1&nbsp;s an <code>mdfind</code> query takes per search.</td></tr>
+  <tr><td>VSZ</td><td>~415&nbsp;GB (ignore)</td><td>Reserved virtual <i>address space</i> (shared caches/mappings), normal on macOS and not memory used &mdash; RSS/footprint are the honest numbers.</td></tr>
+</table>
+<pre># check any time:
+ps -o rss,%cpu,etime -p $(launchctl list | awk '/docsearch/{print $1}')</pre>
+</details>
 </div>
 
 <div class="item-card ok" id="item-4">
@@ -179,7 +190,7 @@
 
 <h2>What gets <i>worse</i> (the honest part)</h2>
 <ol>
-  <li><b>A permanently running background process.</b> Until now the search stack was zero-resident (Spotlight was already running anyway). This adds one python process (~15&nbsp;MB RSS, idle ~0% CPU) that exists whether or not you use the page. On-demand mode was declined, but the rollback is one <code>launchctl bootout</code>.</li>
+  <li><b>A permanently running background process.</b> Until now the search stack was zero-resident (Spotlight was already running anyway). This adds one python process (measured 2026-07-05: ~11&ndash;12&nbsp;MB RSS, 0.0% CPU idle) that exists whether or not you use the page. On-demand mode was declined, but the rollback is one <code>launchctl bootout</code>.</li>
   <li><b>KeepAlive can loop.</b> If the script is ever edited into a syntax error, launchd will respawn it repeatedly (throttled to ~10&nbsp;s). The log file makes this obvious, but it&rsquo;s a failure mode the pure-zsh setup didn&rsquo;t have.</li>
   <li><b>A claimed port.</b> 8377 is now spoken for on this machine; anything else wanting it will fail confusingly until you remember this server.</li>
   <li><b>Two implementations of one query.</b> The include/exclude patterns now live in <code>~/.zshrc</code> <i>and</i> the server. If you tweak one, tweak the other &mdash; noted in both files. (Deliberate trade: importing zsh from python or vice-versa would be far uglier than 4 duplicated regex lines.)</li>
