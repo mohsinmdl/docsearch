@@ -319,20 +319,6 @@
     return next >= 0 && next < n ? next : -1;
   }
 
-  /* Head id -> the head enclosing it, or null. Only date heads have a parent,
-     and only when folder grouping is on. This is the ladder ← climbs: collapse
-     the date group, then step out to the folder holding it. */
-  function headParentsOf(items) {
-    var out = Object.create(null);
-    var folderId = null;
-    (items || []).forEach(function (it) {
-      if (!it) return;
-      if (it.kind === 'folder-head') { folderId = it.id; out[it.id] = null; }
-      else if (it.kind === 'date-head') out[it.id] = folderId;
-    });
-    return out;
-  }
-
   /* The head the cursor belongs to: index of the innermost head at or above
      `idx` in painted order (a head is its own answer), -1 above the first one.
      Works on `visible` rather than `items` because what ← should collapse is
@@ -441,7 +427,6 @@
     docsOf: docsOf,
     docEntriesOf: docEntriesOf,
     navTarget: navTarget,
-    headParentsOf: headParentsOf,
     headAbove: headAbove,
     nextHead: nextHead,
     firstDocUnder: firstDocUnder,

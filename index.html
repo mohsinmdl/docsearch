@@ -308,7 +308,6 @@ try {
   var visible = [];       // items minus collapsed content — what actually paints
   var expanded = Object.create(null); // head id -> true; heads start collapsed
   var entries = [];       // every doc + the heads that hide it — the space the arrows walk
-  var parents = Object.create(null); // head id -> enclosing head id, for stepping out with ←
   var sel = -1;           // index into `visible`: the cursor sits on a doc OR a head, -1 = nowhere
   var offline = false;
   var lastIndexed = null; // Date of last successful fetch
@@ -636,7 +635,6 @@ try {
     docs = Array.isArray(data) ? data : [];
     items = DS.buildList(docs, groupBy);
     entries = DS.docEntriesOf(items);
-    parents = DS.headParentsOf(items);
     visible = DS.visibleItems(items, isExpanded);
     // Results changed, so the old cursor means nothing. Flat mode still opens
     // with its first row selected (and its ↩ hint); grouped mode starts with
@@ -786,12 +784,21 @@ try {
     for (var i = 0; i < entries.length; i++) if (entries[i].doc === doc) return i;
     return -1;
   }
-  /* block:'nearest' is the point — a row already on screen doesn't move the
-     page at all, one just past the fold gets the smallest nudge that shows it
-     (which leaves a freshly opened head visible right above it). */
+  /* Hold the cursor in the middle of the screen so there is always context
+     above and below it. block:'center' is "if it can" for free: the browser
+     clamps scrolling at both ends of the document, so the first and last
+     screenful just stop short instead of over-scrolling. */
   function scrollSelIntoView() {
     var el = listEl.querySelector('.sel');
-    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' });
+    /* Nothing above the list is worth scrolling past, so once the cursor is up
+       there, show the whole top — header and search box included — instead of
+       parking the first row against the viewport edge with the chrome hidden
+       just above it. Checked after the nearest-scroll on purpose: deep in a
+       long list scrollY is far past the list's start and nothing snaps, and up
+       here the selection stays on screen anyway. */
+    var listTop = listEl.getBoundingClientRect().top + window.scrollY;
+    if (window.scrollY <= listTop) window.scrollTo(0, 0);
   }
   function repaintTo(anchor) {
     visible = DS.visibleItems(items, isExpanded);
@@ -812,7 +819,12 @@ try {
   }
   function moveSel(delta) {
     var next = DS.navTarget(entries, navOrigin(delta), delta);
-    if (next < 0) return;                                // at an end — stay put
+    if (next < 0) {
+      // At an end, so the cursor stays put — but ↑ at the top should still be
+      // able to bring the header back rather than leaving the page stuck.
+      if (delta < 0) scrollSelIntoView();
+      return;
+    }
     goToEntry(next);
   }
   function goToEntry(i) {
@@ -839,18 +851,17 @@ try {
     render();
     scrollSelIntoView();
   }
-  /* ← shuts the group you are in and carries the cursor to the row above that
-     heading — the previous group's last runbook while it is open, or that
-     group's own heading while it is shut — so repeated ← walks back up the
-     index closing things behind you. Nothing above (the heading is the first
-     row) means there is nowhere to go, so the cursor stays on it. From a head
-     that is already shut there is nothing to collapse, so ← steps out to the
-     folder holding it instead. */
+  /* ← always moves the cursor to the row above, closing the group you are
+     leaving on the way out if it happens to be open. "The row above" is the
+     previous group's last runbook while that group is open, or its heading
+     while it is shut — and for the first group inside a folder it is the folder
+     heading, so climbing out of a folder falls out of the same rule. Repeated ←
+     therefore walks back up the index, shutting things behind you. Nothing
+     above (already the first row) means there is nowhere to go. */
   function collapseSel() {
     var it = visible[sel];
-    if (it && it.kind !== 'doc' && !expanded[it.id]) {   // already shut — step out
-      var up = parents[it.id];
-      if (up) repaintTo({ id: up });
+    if (it && it.kind !== 'doc' && !expanded[it.id]) {   // already shut — nothing to close
+      if (sel > 0) { sel = sel - 1; render(); scrollSelIntoView(); }
       return;
     }
     var at = DS.headAbove(visible, sel);

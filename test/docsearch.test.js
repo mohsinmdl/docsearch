@@ -252,19 +252,6 @@ test('navTarget on an empty list has nowhere to go', function () {
 
 // ── group-level navigation (⌘↑/⌘↓, ←/→) ──
 
-test('headParentsOf: a date head belongs to the folder above it', function () {
-  const parents = DS.headParentsOf(DS.buildList(FIXTURE, BOTH));
-  assert.equal(parents['d:' + RC + '|2026-07-16'], 'f:' + RC);
-  assert.equal(parents['d:' + PAI + '|2026-07-14'], 'f:' + PAI);
-  assert.equal(parents['f:' + RC], null, 'folder heads are the top of the ladder');
-});
-
-test('headParentsOf: without folder grouping there is nothing to step out to', function () {
-  const parents = DS.headParentsOf(DS.buildList(FIXTURE, { folder: false, date: true }));
-  assert.deepEqual(Object.keys(parents).sort(), ['d:|2026-07-14', 'd:|2026-07-15', 'd:|2026-07-16']);
-  assert.ok(Object.keys(parents).every(id => parents[id] === null));
-});
-
 test('headAbove finds the group a doc sits in, and a head is its own', function () {
   const items = DS.buildList(FIXTURE, BOTH);
   const vis = DS.visibleItems(items, allExpanded);
