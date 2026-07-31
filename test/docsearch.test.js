@@ -188,6 +188,121 @@ test('fully expanded shows everything in painted order', function () {
   assert.equal(DS.docsOf(vis).length, FIXTURE.length);
 });
 
+// ── keyboard navigation across collapsed groups ──
+
+test('docEntriesOf lists every doc in painted order, collapsed or not', function () {
+  const items = DS.buildList(FIXTURE, BOTH);
+  const entries = DS.docEntriesOf(items);
+  assert.deepEqual(entries.map(e => e.doc), DS.docsOf(items));
+  assert.equal(entries.length, FIXTURE.length);
+});
+
+test('docEntriesOf: flat mode has nothing to expand', function () {
+  const entries = DS.docEntriesOf(DS.buildList(FIXTURE, { folder: false, date: false }));
+  assert.ok(entries.every(e => e.heads.length === 0));
+});
+
+test('docEntriesOf: date mode names the date head hiding each doc', function () {
+  const entries = DS.docEntriesOf(DS.buildList(FIXTURE, { folder: false, date: true }));
+  assert.deepEqual(entries.map(e => e.heads), [
+    ['d:|2026-07-16'], ['d:|2026-07-16'], ['d:|2026-07-15'], ['d:|2026-07-15'], ['d:|2026-07-14']
+  ]);
+});
+
+test('docEntriesOf: folder+date names both levels, date scoped to its folder', function () {
+  const entries = DS.docEntriesOf(DS.buildList(FIXTURE, BOTH));
+  assert.deepEqual(entries[0].heads, ['f:' + PAI, 'd:' + PAI + '|2026-07-14']);
+  assert.deepEqual(entries[1].heads, ['f:' + RC, 'd:' + RC + '|2026-07-16']);
+  assert.deepEqual(entries[4].heads, ['f:' + RC, 'd:' + RC + '|2026-07-15']);
+  // Folder mode alone: only the folder head stands between you and the doc.
+  const folderOnly = DS.docEntriesOf(DS.buildList(FIXTURE, { folder: true, date: false }));
+  assert.deepEqual(folderOnly.map(e => e.heads.length), [1, 1, 1, 1, 1]);
+});
+
+test('expanding an entry\'s heads is exactly what reveals its doc', function () {
+  const items = DS.buildList(FIXTURE, BOTH);
+  const entries = DS.docEntriesOf(items);
+  entries.forEach(function (e) {
+    const open = new Set(e.heads);
+    const shown = DS.docsOf(DS.visibleItems(items, id => open.has(id)));
+    assert.ok(shown.indexOf(e.doc) !== -1, 'not revealed: ' + e.doc.path);
+  });
+});
+
+test('navTarget enters at the first doc when nothing is selected, either arrow', function () {
+  const entries = DS.docEntriesOf(DS.buildList(FIXTURE, BOTH));
+  assert.equal(DS.navTarget(entries, -1, 1), 0);
+  assert.equal(DS.navTarget(entries, -1, -1), 0);
+});
+
+test('navTarget steps one doc at a time and stops at both ends', function () {
+  const entries = DS.docEntriesOf(DS.buildList(FIXTURE, BOTH));
+  const last = entries.length - 1;
+  assert.equal(DS.navTarget(entries, 0, 1), 1);
+  assert.equal(DS.navTarget(entries, 2, -1), 1);
+  assert.equal(DS.navTarget(entries, last, 1), -1, 'past the last runbook: no move');
+  assert.equal(DS.navTarget(entries, 0, -1), -1, 'above the first runbook: no move');
+});
+
+test('navTarget on an empty list has nowhere to go', function () {
+  assert.equal(DS.navTarget([], 1, 1), -1);
+  assert.equal(DS.navTarget([], -1, 1), -1);
+  assert.equal(DS.navTarget(undefined, -1, 1), -1);
+});
+
+// ── group-level navigation (⌘↑/⌘↓, ←/→) ──
+
+test('headParentsOf: a date head belongs to the folder above it', function () {
+  const parents = DS.headParentsOf(DS.buildList(FIXTURE, BOTH));
+  assert.equal(parents['d:' + RC + '|2026-07-16'], 'f:' + RC);
+  assert.equal(parents['d:' + PAI + '|2026-07-14'], 'f:' + PAI);
+  assert.equal(parents['f:' + RC], null, 'folder heads are the top of the ladder');
+});
+
+test('headParentsOf: without folder grouping there is nothing to step out to', function () {
+  const parents = DS.headParentsOf(DS.buildList(FIXTURE, { folder: false, date: true }));
+  assert.deepEqual(Object.keys(parents).sort(), ['d:|2026-07-14', 'd:|2026-07-15', 'd:|2026-07-16']);
+  assert.ok(Object.keys(parents).every(id => parents[id] === null));
+});
+
+test('headAbove finds the group a doc sits in, and a head is its own', function () {
+  const items = DS.buildList(FIXTURE, BOTH);
+  const vis = DS.visibleItems(items, allExpanded);
+  // ['folder-head', 'date-head', 'doc', 'folder-head', 'date-head', 'doc', 'doc', ...]
+  assert.equal(DS.headAbove(vis, 2), 1, 'a doc resolves to its innermost (date) head');
+  assert.equal(vis[DS.headAbove(vis, 2)].kind, 'date-head');
+  assert.equal(DS.headAbove(vis, 1), 1, 'a head is its own answer');
+  assert.equal(DS.headAbove(vis, 0), 0);
+  // Flat mode has no heads at all — ← has nothing to close.
+  assert.equal(DS.headAbove(DS.visibleItems(DS.buildList(FIXTURE, { folder: false, date: false }), allCollapsed), 3), -1);
+});
+
+test('nextHead walks group to group and stops at the ends', function () {
+  const vis = DS.visibleItems(DS.buildList(FIXTURE, { folder: false, date: true }), allExpanded);
+  const heads = vis.map((it, i) => (it.kind !== 'doc' ? i : -1)).filter(i => i >= 0);
+  assert.equal(DS.nextHead(vis, -1, 1), heads[0], 'no selection enters at the first head');
+  assert.equal(DS.nextHead(vis, -1, -1), heads[0]);
+  assert.equal(DS.nextHead(vis, heads[0], 1), heads[1]);
+  assert.equal(DS.nextHead(vis, heads[1], -1), heads[0]);
+  assert.equal(DS.nextHead(vis, heads[heads.length - 1], 1), -1, 'past the last group: stay put');
+  assert.equal(DS.nextHead(vis, heads[0], -1), -1);
+  // From inside a group, ⌘↑ lands on that group's own head — it is the nearest above.
+  assert.equal(DS.nextHead(vis, heads[1] + 1, -1), heads[1]);
+});
+
+test('firstDocUnder anchors the arrows when the cursor is on a head', function () {
+  const items = DS.buildList(FIXTURE, BOTH);
+  const entries = DS.docEntriesOf(items);
+  const rcJuly16 = 'd:' + RC + '|2026-07-16';
+  const at = DS.firstDocUnder(entries, rcJuly16);
+  assert.equal(DS.titleOf(entries[at].doc.path), 'custom rocketchat image runbook');
+  assert.equal(DS.firstDocUnder(entries, 'f:' + PAI), 0, 'the first folder starts the order');
+  assert.equal(DS.firstDocUnder(entries, 'f:nope'), -1);
+  // ↓ from the head enters the group; ↑ from it leaves upwards.
+  assert.equal(DS.navTarget(entries, at - 1, 1), at);
+  assert.equal(DS.navTarget(entries, at, -1), at - 1);
+});
+
 // ── folder label emphasis ──
 
 test('folder labels emphasize the identifying words, dim the scaffolding', function () {

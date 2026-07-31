@@ -103,6 +103,16 @@ try {
   .date-head.top { margin-top:12px; padding-top:14px; padding-bottom:9px; border-top:1px solid var(--line); color:var(--text-sub); }
   .list > .date-head.top:first-child { margin-top:0; padding-top:9px; border-top:none; }
   .folder-head:hover, .date-head:hover { background:var(--row-hover); }
+  /* The keyboard cursor can rest on a head (⌘↑/⌘↓, ←), so heads take the same
+     selected background as a row — and the same scroll margin when followed. */
+  .folder-head, .date-head { scroll-margin-block:16px; }
+  .folder-head.sel, .date-head.sel { background:var(--sel-bg); }
+  /* The gap below a head is the next head's top margin, which its own background
+     can't reach — pull it in as a transparent bottom border (background paints to
+     the border-box edge) with a negative margin so spacing stays identical and
+     the hover band runs the full slot down to the next separator line. */
+  :is(.folder-head, .date-head):has(+ .folder-head, + .date-head.top) { border-bottom:12px solid transparent; margin-bottom:-12px; }
+  :is(.folder-head, .date-head):has(+ .date-head:not(.top)) { border-bottom:4px solid transparent; margin-bottom:-4px; }
   .head-lbl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   .date-head:hover .head-lbl { color:var(--text); }
   /* Two-tone folder paths: scaffolding recedes, identity segments lead. */
@@ -112,7 +122,8 @@ try {
   .head-car { font-size:9px; color:var(--text-dim); width:10px; flex-shrink:0; text-align:center; }
   .head-cnt { color:var(--text-dim); font-weight:400; flex-shrink:0; }
 
-  .row { display:flex; align-items:center; gap:16px; padding:10px 12px; margin:0 -12px; border-radius:4px; background:transparent; cursor:pointer; border-bottom:1px solid var(--line-soft); text-decoration:none; color:inherit; }
+  /* scroll-margin keeps a keyboard-followed row off the viewport edge. */
+  .row { display:flex; align-items:center; gap:16px; padding:10px 12px; margin:0 -12px; border-radius:4px; background:transparent; cursor:pointer; border-bottom:1px solid var(--line-soft); text-decoration:none; color:inherit; scroll-margin-block:16px; }
   .row:hover { background:var(--row-hover); }
   .row.sel { background:var(--sel-bg); }
   .row:focus-visible { outline:2px solid var(--field-border-focus); outline-offset:-2px; }
@@ -139,7 +150,7 @@ try {
   .keys { display:flex; align-items:center; gap:4px; flex-shrink:0; }
   .keys kbd { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; color:var(--text-sub); background:var(--key-bg); border:1px solid var(--field-border); border-radius:4px; padding:2px 6px; min-width:10px; text-align:center; }
   .keys i { font-style:normal; font-size:11px; color:var(--text-dim); }
-  .keys .k-note { font-size:11px; color:var(--text-dim); }
+  .k-note { font-size:11px; color:var(--text-dim); }
   #help-btn, #settings-btn { cursor:pointer; }
 
   /* Settings modal — rules editor. Same modal shell, plus a compact input
@@ -191,10 +202,14 @@ try {
       <div class="sc-row"><span>Focus search</span><span class="keys"><kbd>⌘K</kbd><i>or</i><kbd>/</kbd></span></div>
       <div class="sc-row"><span>Clear · leave · return to search</span><span class="keys"><kbd>esc</kbd></span></div>
       <div class="sc-sec">List</div>
-      <div class="sc-row"><span>Move selection</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd></span></div>
-      <div class="sc-row"><span>Open selected runbook</span><span class="keys"><kbd>↩</kbd></span></div>
-      <div class="sc-row"><span>Open in new tab</span><span class="keys"><kbd>⌘</kbd><i>+</i><span class="k-note">click</span></span></div>
+      <div class="sc-row"><span>Move selection · opens the next group</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd></span></div>
+      <div class="sc-row"><span>First · last runbook</span><span class="keys"><kbd>g</kbd><kbd>g</kbd><i>·</i><kbd>G</kbd></span></div>
+      <div class="sc-row"><span>Open selected runbook</span><span class="keys"><kbd>↩</kbd><i>or</i><kbd>→</kbd></span></div>
+      <div class="sc-row"><span>Open in new tab</span><span class="keys"><kbd>⌘↩</kbd><i>or</i><kbd>⌘</kbd><i>+</i><span class="k-note">click</span></span></div>
       <div class="sc-sec">Grouping</div>
+      <div class="sc-row"><span>Jump to next · previous group</span><span class="keys"><kbd>⌘↓</kbd><kbd>⌘↑</kbd></span></div>
+      <div class="sc-row"><span>Collapse · expand group <span class="k-note">(⌘ while typing a query)</span></span><span class="keys"><kbd>←</kbd><kbd>→</kbd></span></div>
+      <div class="sc-row"><span>Toggle the selected group</span><span class="keys"><kbd>↩</kbd></span></div>
       <div class="sc-row"><span>Group by folder</span><span class="keys"><kbd>g</kbd><kbd>f</kbd></span></div>
       <div class="sc-row"><span>Group by date</span><span class="keys"><kbd>g</kbd><kbd>d</kbd></span></div>
       <div class="sc-row"><span>Expand all</span><span class="keys"><kbd>g</kbd><kbd>e</kbd></span></div>
@@ -292,12 +307,67 @@ try {
   var items = [];         // full render list from buildList, rebuilt in setDocs
   var visible = [];       // items minus collapsed content — what actually paints
   var expanded = Object.create(null); // head id -> true; heads start collapsed
-  var flat = [];          // visible docs in painted order — the index space for `sel`
-  var sel = 0;
+  var entries = [];       // every doc + the heads that hide it — the space the arrows walk
+  var parents = Object.create(null); // head id -> enclosing head id, for stepping out with ←
+  var sel = -1;           // index into `visible`: the cursor sits on a doc OR a head, -1 = nowhere
   var offline = false;
   var lastIndexed = null; // Date of last successful fetch
   var debounceTimer = null;
   var reqSeq = 0;
+
+  /* ── back-from-a-runbook ──
+     Opening a runbook is a real same-tab navigation, so coming back re-runs this
+     whole page: query, open groups, cursor and scroll would all start over.
+     Chrome's bfcache sometimes restores the live page instead (and when it does,
+     none of this runs — the state simply never went away), but it is evicted
+     under memory pressure, skipped with devtools open, and gone once you have
+     lingered on the runbook, so the index cannot rely on it. Snapshot the view
+     into sessionStorage when the page goes away and put it back on load.
+     sessionStorage, not local: this is "where I was in this tab", and a brand
+     new tab should still open on a clean index. */
+  var SESSION_KEY = 'docsearch-session';
+  function loadSession() {
+    try {
+      var raw = sessionStorage.getItem(SESSION_KEY);
+      var s = raw ? JSON.parse(raw) : null;
+      return s && typeof s === 'object' ? s : null;
+    } catch (e) { return null; }
+  }
+  function saveSession() {
+    try {
+      var a = selAnchor();
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+        q: qEl.value,
+        open: Object.keys(expanded).filter(function (id) { return expanded[id]; }),
+        sel: a ? (a.doc ? { path: a.doc.path } : { id: a.id }) : null,
+        y: window.scrollY || 0
+      }));
+    } catch (e) {}
+  }
+  /* An explicit ⌘R/Ctrl+R means "give me a clean slate", so it must not restore
+     — the browser tells us why the page loaded, and "reload" is exactly that
+     gesture. A swipe/Back reports "back_forward" even when bfcache missed and
+     the page was really re-fetched, which is the case the snapshot exists for.
+     (Theme and the Folder/Date toggles are preferences in localStorage, not
+     view state: a reload that reset your theme would be surprising.) */
+  function navType() {
+    try {
+      var nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+      if (nav && nav.type) return nav.type;
+      if (performance.navigation) { // pre-Navigation-Timing-2 fallback
+        return performance.navigation.type === 1 ? 'reload'
+             : performance.navigation.type === 2 ? 'back_forward' : 'navigate';
+      }
+    } catch (e) {}
+    return 'navigate';
+  }
+  var reloaded = navType() === 'reload';
+  var restoring = reloaded ? null : loadSession(); // consumed by the first render, then dropped
+  if (reloaded) { try { sessionStorage.removeItem(SESSION_KEY); } catch (e) {} }
+  /* Chrome's own scroll restoration races the fetch — the list isn't painted
+     yet when it fires, so it lands at the top and then fights ours. */
+  try { if ('scrollRestoration' in history) history.scrollRestoration = 'manual'; } catch (e) {}
+  window.addEventListener('pagehide', saveSession);
 
   // ── theme (Auto/Light/Dark segmented control, Ctrl+Shift+L) ──
   function getTheme() { try { return localStorage.getItem('docsearch-theme') || 'auto'; } catch (e) { return 'auto'; } }
@@ -519,20 +589,59 @@ try {
   // ── data shaping ──
   function isExpanded(id) { return !!expanded[id]; }
 
+  /* What the cursor is on, in a form that survives a repaint: a doc keeps its
+     object identity, a head its id. */
+  function anchorOf(it) {
+    if (!it) return null;
+    return it.kind === 'doc' ? { doc: it.doc } : { id: it.id };
+  }
+  function selAnchor() { return anchorOf(visible[sel]); }
+  function indexOfAnchor(a) {
+    if (!a) return -1;
+    for (var i = 0; i < visible.length; i++) {
+      var it = visible[i];
+      if (a.doc ? (it.kind === 'doc' && it.doc === a.doc) : (it.kind !== 'doc' && it.id === a.id)) return i;
+    }
+    return -1;
+  }
+  function entryOfDoc(doc) {
+    for (var i = 0; i < entries.length; i++) if (entries[i].doc === doc) return entries[i];
+    return null;
+  }
+  /* Repaint with the cursor put back on `a`. When `a` is a doc that is no
+     longer painted — its group was just collapsed by a click or `gc` — the
+     cursor retreats to the innermost enclosing head that is still on screen
+     rather than vanishing or jumping to some unrelated row. */
+  function restoreSel(a) {
+    sel = indexOfAnchor(a);
+    if (sel !== -1 || !a || !a.doc) return;
+    var e = entryOfDoc(a.doc);
+    for (var i = e ? e.heads.length - 1 : -1; i >= 0; i--) {
+      var at = indexOfAnchor({ id: e.heads[i] });
+      if (at !== -1) { sel = at; return; }
+    }
+  }
+
   /* reshape = collapse filter only (runs on every head click); setDocs = full
      regroup (new results or toggle flip). Kept apart so expanding a folder
      never re-parses every mtime, and arrow-key renders re-parse nothing.
      With both toggles off, buildList returns the server's order untouched —
      the original flat list. */
   function reshape() {
+    var anchor = selAnchor();
     visible = DS.visibleItems(items, isExpanded);
-    flat = DS.docsOf(visible);
-    sel = Math.min(Math.max(sel, 0), Math.max(flat.length - 1, 0));
+    restoreSel(anchor);
   }
   function setDocs(data) {
     docs = Array.isArray(data) ? data : [];
     items = DS.buildList(docs, groupBy);
-    reshape();
+    entries = DS.docEntriesOf(items);
+    parents = DS.headParentsOf(items);
+    visible = DS.visibleItems(items, isExpanded);
+    // Results changed, so the old cursor means nothing. Flat mode still opens
+    // with its first row selected (and its ↩ hint); grouped mode starts with
+    // no cursor at all, since every group is collapsed.
+    sel = (visible.length && visible[0].kind === 'doc') ? 0 : -1;
   }
 
   // ── rendering ──
@@ -564,27 +673,26 @@ try {
       return;
     }
 
-    var i = 0;
-    visible.forEach(function (it) {
+    visible.forEach(function (it, idx) {
       if (it.kind === 'doc') {
         // With folder heads on, the folder lives in the heading and the row
         // shows just the filename; otherwise the full path, as it always was.
         listEl.appendChild(DS.createRow(document, it.doc, {
-          selected: i === sel,
+          selected: idx === sel,
           pathText: groupBy.folder ? '' : it.doc.path
         }));
-        i++;
       } else {
-        listEl.appendChild(headEl(it));
+        listEl.appendChild(headEl(it, idx === sel, idx));
       }
     });
   }
 
-  function headEl(it) {
+  function headEl(it, selected, idx) {
     var h = document.createElement('div');
-    h.className = it.kind === 'folder-head'
+    h.className = (it.kind === 'folder-head'
       ? 'folder-head'
-      : 'date-head' + (groupBy.folder ? '' : ' top'); // top-level date heads get the folder-head separator
+      : 'date-head' + (groupBy.folder ? '' : ' top')) // top-level date heads get the folder-head separator
+      + (selected ? ' sel' : '');
     var car = document.createElement('span'); car.className = 'head-car';
     car.textContent = expanded[it.id] ? '▾' : '▸';
     var lbl = document.createElement('span'); lbl.className = 'head-lbl';
@@ -604,7 +712,10 @@ try {
     cnt.textContent = it.count;
     h.appendChild(car); h.appendChild(lbl); h.appendChild(cnt);
     if (it.kind === 'folder-head') h.title = it.key; // full path on hover
+    // Clicking a head puts the cursor on it too, so the mouse and the keyboard
+    // leave you in the same place and ←/→/↩ carry straight on from a click.
     h.addEventListener('click', function () {
+      sel = idx;
       expanded[it.id] = !expanded[it.id];
       reshape();
       render();
@@ -635,16 +746,140 @@ try {
         if (seq !== reqSeq || data === null) return; // stale, or already handled as offline
         setDocs(data); offline = false; lastIndexed = new Date();
         render();
+        if (restoring) { applyRestore(restoring); restoring = null; }
       });
   }
 
+  /* Put the cursor and the scroll position back after the first paint — the
+     open groups were already seeded before the fetch, so the list is the right
+     shape by now. The cursor is re-found by path/id rather than by index, so a
+     runbook that has since moved or vanished just leaves it unset instead of
+     selecting some unrelated row. Deliberately no scrollSelIntoView: the saved
+     scroll is the whole point, and nudging the selection into view would move
+     the page away from where it was left. */
+  function applyRestore(s) {
+    if (s.sel) {
+      var at = -1;
+      for (var i = 0; i < visible.length; i++) {
+        var it = visible[i];
+        if (s.sel.path ? (it.kind === 'doc' && it.doc.path === s.sel.path)
+                       : (it.kind !== 'doc' && it.id === s.sel.id)) { at = i; break; }
+      }
+      if (at !== -1) { sel = at; render(); }
+    }
+    if (typeof s.y === 'number' && s.y > 0) window.scrollTo(0, s.y);
+  }
+
   qEl.addEventListener('input', function () {
-    sel = 0;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(function () { search(qEl.value.trim()); }, 250);
   });
 
   // ── keyboard ──
+  /* The arrows walk `entries` — every runbook in painted order, collapsed or
+     not — and then open whatever was hiding the one they land on. So ↓ from a
+     standing start enters the newest group without expanding the rest, ↓ off
+     the end of a group steps into the next one, and ↑ comes back into the
+     previous group at its last runbook. Groups stay open behind you: nothing
+     shifts under the cursor, and `gc` still clears the lot. */
+  function fullIndexOf(doc) {
+    for (var i = 0; i < entries.length; i++) if (entries[i].doc === doc) return i;
+    return -1;
+  }
+  /* block:'nearest' is the point — a row already on screen doesn't move the
+     page at all, one just past the fold gets the smallest nudge that shows it
+     (which leaves a freshly opened head visible right above it). */
+  function scrollSelIntoView() {
+    var el = listEl.querySelector('.sel');
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+  }
+  function repaintTo(anchor) {
+    visible = DS.visibleItems(items, isExpanded);
+    restoreSel(anchor);
+    render();
+    scrollSelIntoView();
+  }
+  /* Where ↑/↓ resume from. On a doc that's simply its place in the full order;
+     on a head, its first runbook anchors both directions — step forward from
+     just before it to enter the group, back from it to leave upwards. */
+  function navOrigin(delta) {
+    var it = visible[sel];
+    if (!it) return -1;
+    if (it.kind === 'doc') return fullIndexOf(it.doc);
+    var at = DS.firstDocUnder(entries, it.id);
+    if (at < 0) return -1;
+    return delta > 0 ? at - 1 : at;
+  }
+  function moveSel(delta) {
+    var next = DS.navTarget(entries, navOrigin(delta), delta);
+    if (next < 0) return;                                // at an end — stay put
+    goToEntry(next);
+  }
+  function goToEntry(i) {
+    entries[i].heads.forEach(function (id) { expanded[id] = true; });
+    repaintTo({ doc: entries[i].doc });
+  }
+  /* ⌘↓/⌘↑ — pure group-to-group motion, expanding nothing. From inside a group
+     ⌘↑ lands on that group's own head first, simply because it is the nearest
+     head above the cursor. */
+  function moveHead(dir) {
+    var at = DS.nextHead(visible, sel, dir);
+    if (at < 0) return;
+    sel = at;
+    render();
+    scrollSelIntoView();
+  }
+  /* ← shuts the group you are in and carries the cursor to the row above that
+     heading — the previous group's last runbook while it is open, or that
+     group's own heading while it is shut — so repeated ← walks back up the
+     index closing things behind you. Nothing above (the heading is the first
+     row) means there is nowhere to go, so the cursor stays on it. From a head
+     that is already shut there is nothing to collapse, so ← steps out to the
+     folder holding it instead. */
+  function collapseSel() {
+    var it = visible[sel];
+    if (it && it.kind !== 'doc' && !expanded[it.id]) {   // already shut — step out
+      var up = parents[it.id];
+      if (up) repaintTo({ id: up });
+      return;
+    }
+    var at = DS.headAbove(visible, sel);
+    if (at < 0) return;                                  // flat mode: nothing to close
+    var head = visible[at];
+    // Read the row above before collapsing: everything ahead of the heading is
+    // untouched by the collapse, so this anchor survives the repaint.
+    var anchor = at > 0 ? anchorOf(visible[at - 1]) : { id: head.id };
+    expanded[head.id] = false;
+    repaintTo(anchor);
+  }
+  /* Opening the selected runbook — same destination as clicking its row.
+     Shared by ↩ and →, so "open" means one thing wherever it is triggered. */
+  function openSel(newTab) {
+    var it = visible[sel];
+    var href = it && it.kind === 'doc' && DS.hrefFor(it.doc.path);
+    if (!href) return false;                  // on a head, or nothing selected
+    if (newTab) window.open(href, '_blank');
+    else window.location.assign(href);
+    return true;
+  }
+  /* → always means "go deeper": into a shut group, into an open group's first
+     runbook, or — on a runbook, where there is nowhere further to descend —
+     into the document itself. */
+  function expandSel(newTab) {
+    var it = visible[sel];
+    if (!it) return;
+    if (it.kind === 'doc') { openSel(newTab); return; }
+    if (!expanded[it.id]) { expanded[it.id] = true; repaintTo({ id: it.id }); return; }
+    if (sel + 1 < visible.length) { sel = sel + 1; render(); scrollSelIntoView(); } // into the group
+  }
+  function toggleSelHead() {
+    var it = visible[sel];
+    if (!it || it.kind === 'doc') return false;
+    expanded[it.id] = !expanded[it.id];
+    repaintTo({ id: it.id });
+    return true;
+  }
+
   var pendingG = 0; // timestamp of a 'g' awaiting its chord partner (gf/gd/ge/gc)
   window.addEventListener('keydown', function (e) {
     /* Settings modal first: Esc closes, everything else passes through
@@ -670,13 +905,28 @@ try {
        "gateway" stay typable. Esc Esc gets you out of the field. */
     if (document.activeElement !== qEl && !e.metaKey && !e.ctrlKey && !e.altKey) {
       var ck = e.key.toLowerCase();
+      // Shift+G before the chord logic below, which would otherwise read the
+      // lowercased 'g' as the start of a new chord.
+      if (ck === 'g' && e.shiftKey) { pendingG = 0; e.preventDefault(); if (entries.length) goToEntry(entries.length - 1); return; }
       if (pendingG && Date.now() - pendingG < 800) {
         pendingG = 0;
+        if (ck === 'g') { e.preventDefault(); if (entries.length) goToEntry(0); return; }
         if (ck === 'f' || ck === 'd') { e.preventDefault(); toggleGroup(ck === 'f' ? 'folder' : 'date'); return; }
         if (ck === 'e' || ck === 'c') { e.preventDefault(); setAllHeads(ck === 'e'); return; }
         if (ck === 's') { e.preventDefault(); showSettings(true); return; }
       }
       if (ck === 'g') { pendingG = Date.now(); e.preventDefault(); return; }
+    }
+    /* ←/→ drive the groups whenever there is no query to edit — the field is
+       autofocused on load and esc puts you back in it, so gating these on "not
+       focused" left them dead in normal use. With text in the box they go back
+       to being caret keys, and ⌘←/⌘→ take over as the group keys there. */
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+        && (e.metaKey || e.ctrlKey || document.activeElement !== qEl || !qEl.value)
+        && !e.altKey) {
+      e.preventDefault();
+      if (e.key === 'ArrowLeft') collapseSel(); else expandSel(e.metaKey || e.ctrlKey);
+      return;
     }
     if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
       e.preventDefault();
@@ -687,24 +937,39 @@ try {
       return;
     }
     if (e.key === '/' && document.activeElement !== qEl) { e.preventDefault(); qEl.focus(); return; }
-    if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, Math.max(flat.length - 1, 0)); render(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); render(); }
+    /* ⌘↓/⌘↑ jump between groups. They shadow Chrome's scroll-to-end, which is
+       the trade we want: this list is what the keys should move. */
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault(); moveHead(e.key === 'ArrowDown' ? 1 : -1); return;
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveSel(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveSel(-1); }
     else if (e.key === 'Enter') {
-      // Same-tab, same destination as clicking the selected row.
-      var href = flat[sel] && DS.hrefFor(flat[sel].path);
-      if (href) window.location.assign(href);
+      // On a head, Enter is the toggle; on a runbook it opens — same-tab, same
+      // destination as a click, or a background tab with ⌘ (as ⌘-click does).
+      if (toggleSelHead()) { e.preventDefault(); return; }
+      if (openSel(e.metaKey || e.ctrlKey)) e.preventDefault();
     }
     else if (e.key === 'Escape') {
       // Two-stage: first Esc clears the query, second blurs the field so the
       // g-chords work; Esc with an idle empty field refocuses it.
-      if (qEl.value) { qEl.value = ''; sel = 0; search(''); }
+      if (qEl.value) { qEl.value = ''; search(''); }
       else if (document.activeElement === qEl) qEl.blur();
       else qEl.focus();
     }
   });
 
-  // initial load: empty query = all runbooks, newest first (dashboard mode)
-  search('');
+  /* Initial load: empty query = all runbooks, newest first (dashboard mode) —
+     unless we are coming back from a runbook, in which case the query and the
+     open groups are restored first so the fetch paints the list already in the
+     shape it was left in (the cursor and scroll follow in applyRestore). */
+  if (restoring) {
+    if (typeof restoring.q === 'string') qEl.value = restoring.q;
+    if (restoring.open && restoring.open.length) {
+      restoring.open.forEach(function (id) { expanded[id] = true; });
+    }
+  }
+  search(qEl.value.trim());
 })();
 </script>
 </body>

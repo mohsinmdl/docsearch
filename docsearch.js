@@ -280,6 +280,103 @@
     return out;
   }
 
+  /* Every doc in painted order paired with the head ids that hide it while
+     collapsed — [] flat, [dateId] under Date, [folderId, dateId] under both.
+     Same scoping visibleItems applies (a folder head opens a fresh date scope),
+     so expanding an entry's heads is exactly the inverse of that collapse
+     filter: it is what lets the arrow keys step into a group that isn't
+     showing yet. Parallel to docsOf(items). */
+  function docEntriesOf(items) {
+    var out = [];
+    var folderId = null;
+    var dateId = null;
+    (items || []).forEach(function (it) {
+      if (!it) return;
+      if (it.kind === 'folder-head') { folderId = it.id; dateId = null; }
+      else if (it.kind === 'date-head') { dateId = it.id; }
+      else {
+        var heads = [];
+        if (folderId) heads.push(folderId);
+        if (dateId) heads.push(dateId);
+        out.push({ doc: it.doc, heads: heads });
+      }
+    });
+    return out;
+  }
+
+  /* Where an arrow key lands, as an index into docEntriesOf's full order.
+     `cur` is the currently selected doc's index there, or -1 when nothing is
+     selected at all (every head collapsed, so no row is showing); `delta` is
+     ±1. Returns -1 when the move would run off either end — the caller leaves
+     the selection alone. Entering from nothing lands on the first doc whichever
+     key was pressed: with no cursor on screen there is no "previous" to go
+     back to. */
+  function navTarget(entries, cur, delta) {
+    var n = (entries || []).length;
+    if (!n) return -1;
+    if (cur < 0) return 0;
+    var next = cur + delta;
+    return next >= 0 && next < n ? next : -1;
+  }
+
+  /* Head id -> the head enclosing it, or null. Only date heads have a parent,
+     and only when folder grouping is on. This is the ladder ← climbs: collapse
+     the date group, then step out to the folder holding it. */
+  function headParentsOf(items) {
+    var out = Object.create(null);
+    var folderId = null;
+    (items || []).forEach(function (it) {
+      if (!it) return;
+      if (it.kind === 'folder-head') { folderId = it.id; out[it.id] = null; }
+      else if (it.kind === 'date-head') out[it.id] = folderId;
+    });
+    return out;
+  }
+
+  /* The head the cursor belongs to: index of the innermost head at or above
+     `idx` in painted order (a head is its own answer), -1 above the first one.
+     Works on `visible` rather than `items` because what ← should collapse is
+     the group you can see yourself inside. */
+  function headAbove(visible, idx) {
+    var list = visible || [];
+    for (var i = Math.min(idx, list.length - 1); i >= 0; i--) {
+      if (list[i] && list[i].kind !== 'doc') return i;
+    }
+    return -1;
+  }
+
+  /* Group-to-group motion: index of the next (dir > 0) or previous head in
+     painted order, -1 when there is none that way. From no selection at all
+     (idx < 0) both directions enter at the first head. Deliberately blind to
+     expansion state — this moves the cursor, it doesn't open anything. */
+  function nextHead(visible, idx, dir) {
+    var list = visible || [];
+    var i;
+    if (idx < 0) {
+      for (i = 0; i < list.length; i++) if (list[i] && list[i].kind !== 'doc') return i;
+      return -1;
+    }
+    if (dir > 0) {
+      for (i = idx + 1; i < list.length; i++) if (list[i] && list[i].kind !== 'doc') return i;
+    } else {
+      for (i = Math.min(idx, list.length) - 1; i >= 0; i--) if (list[i] && list[i].kind !== 'doc') return i;
+    }
+    return -1;
+  }
+
+  /* First doc under a head, as an index into docEntriesOf's full order (-1 if
+     the head has none — buildList never emits such a head, but callers get a
+     safe answer anyway). Docs under a head are contiguous, so this one number
+     anchors ↑/↓ when the cursor is sitting on a head: step forward from
+     firstDocUnder - 1 to enter the group, back from firstDocUnder to leave it. */
+  function firstDocUnder(entries, headId) {
+    var list = entries || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].heads.indexOf(headId) !== -1) return i;
+    }
+    return -1;
+  }
+
   /* Path-form /view URL, so relative links inside a runbook
      (href="sibling.html") resolve against the doc's own directory. */
   function hrefFor(path) {
@@ -342,6 +439,12 @@
     buildList: buildList,
     visibleItems: visibleItems,
     docsOf: docsOf,
+    docEntriesOf: docEntriesOf,
+    navTarget: navTarget,
+    headParentsOf: headParentsOf,
+    headAbove: headAbove,
+    nextHead: nextHead,
+    firstDocUnder: firstDocUnder,
     hrefFor: hrefFor,
     createRow: createRow
   };
