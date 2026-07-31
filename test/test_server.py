@@ -8,6 +8,7 @@ importable normally) and never starts the HTTP server: everything under test
 lives above the request handler.
 """
 import importlib.util
+import json
 import os
 import shutil
 import tempfile
@@ -35,6 +36,10 @@ class WalkTestCase(unittest.TestCase):
         self.home = os.path.realpath(tempfile.mkdtemp(prefix="docsearch-test-"))
         self.addCleanup(shutil.rmtree, self.home, True)
         self.ds.HOME = self.home
+        # Hermetic settings: point the file into the fake home (absent =
+        # defaults) and recompile the rules AFTER the HOME patch.
+        self.ds.SETTINGS_PATH = os.path.join(self.home, "settings.json")
+        self.ds.load_settings()
 
     def write(self, rel, body="<html><body>hello</body></html>", mtime=None):
         path = os.path.join(self.home, rel)
@@ -49,12 +54,21 @@ class WalkTestCase(unittest.TestCase):
         return sorted(d["rel"] for d in docs)
 
     def scan(self):
-        docs, _ = self.ds.scan_corpus()
+        docs, _ = self.ds.scan_corpus(self.ds._rules)
         return docs
 
     def search(self, query):
         results, _ = self.ds.run_search(query)
         return results
+
+    def use_settings(self, whitelist=None, blacklist=None):
+        """Apply a rules doc (raw entries — server-side detection applies)."""
+        doc, warnings = self.ds.normalize_settings({
+            "whitelist": whitelist if whitelist is not None else ["docs"],
+            "blacklist": blacklist if blacklist is not None else [],
+        })
+        self.ds.apply_settings(doc)
+        return warnings
 
 
 # ── corpus: what the walk collects ──────────────────────────────────────────
@@ -112,7 +126,7 @@ class TestCorpus(WalkTestCase):
         os.makedirs(os.path.join(blocked, "docs"))
         os.chmod(blocked, 0o000)
         self.addCleanup(os.chmod, blocked, 0o755)
-        docs, unreadable = self.ds.scan_corpus()
+        docs, unreadable = self.ds.scan_corpus(self.ds._rules)
         self.assertEqual(self.rels(docs), ["docs/ok.html"])
         self.assertEqual(unreadable, [blocked])
 
@@ -197,7 +211,7 @@ class TestCaching(WalkTestCase):
         self.write("docs/a.html")
         scans = []
         real = self.ds.scan_corpus
-        self.ds.scan_corpus = lambda: (scans.append(1), real())[1]
+        self.ds.scan_corpus = lambda rules: (scans.append(1), real(rules))[1]
         self.search("")
         self.search("")
         self.assertEqual(len(scans), 1)
@@ -266,6 +280,228 @@ class TestViewAllowed(WalkTestCase):
     def test_rejects_traversal_back_out_of_home(self):
         self.assertFalse(self.ds.view_allowed(
             os.path.join(self.home, "docs", "..", "..", "etc", "passwd")))
+
+
+# ── whitelist/blacklist rules ───────────────────────────────────────────────
+
+class TestRuleNormalization(WalkTestCase):
+
+    def norm(self, raw):
+        return self.ds.normalize_entry(raw)
+
+    def test_auto_detection(self):
+        self.assertEqual(self.norm("docs"), {"type": "folder-name", "value": "docs"})
+        self.assertEqual(self.norm("docs/"),  # trailing slash is not a path
+                         {"type": "folder-name", "value": "docs"})
+        self.assertEqual(self.norm("report.html"), {"type": "filename", "value": "report.html"})
+        self.assertEqual(self.norm("~/Documents/Codex"),
+                         {"type": "path", "value": os.path.join(self.home, "Documents/Codex")})
+        self.assertEqual(self.norm("projects/app"),  # bare-relative means HOME-relative
+                         {"type": "path", "value": os.path.join(self.home, "projects/app")})
+        self.assertEqual(self.norm("/Volumes/x/docs"), {"type": "path", "value": "/Volumes/x/docs"})
+
+    def test_explicit_type_is_validated(self):
+        self.assertEqual(self.norm({"type": "filename", "value": "a.html"}),
+                         {"type": "filename", "value": "a.html"})
+        for bad in ({"type": "filename", "value": "notes.txt"},
+                    {"type": "folder-name", "value": "a/b"},
+                    {"type": "nonsense", "value": "x"}):
+            with self.assertRaises(ValueError):
+                self.norm(bad)
+
+    def test_rejects_unusable_input(self):
+        for bad in ("", "   ", "*.html", "docs?", "/", None, 42):
+            with self.assertRaises(ValueError):
+                self.norm(bad if bad is not None else {"value": None})
+
+    def test_settings_dedupe_is_case_insensitive(self):
+        doc, _ = self.ds.normalize_settings(
+            {"whitelist": ["docs", "Docs", "DOCS/"], "blacklist": []})
+        self.assertEqual(len(doc["whitelist"]), 1)
+
+    def test_empty_whitelist_warns(self):
+        doc, warnings = self.ds.normalize_settings({"whitelist": [], "blacklist": []})
+        self.assertEqual(doc["whitelist"], [])
+        self.assertTrue(any("whitelist is empty" in w for w in warnings))
+
+    def test_missing_path_warns_but_is_kept(self):
+        doc, warnings = self.ds.normalize_settings(
+            {"whitelist": ["docs", "~/no/such/place"], "blacklist": []})
+        self.assertEqual(len(doc["whitelist"]), 2)
+        self.assertTrue(any("doesn't exist" in w for w in warnings))
+
+
+class TestRuleMatching(WalkTestCase):
+
+    def test_blacklist_filename_beats_whitelist(self):
+        self.write("docs/keep.html")
+        kill = self.write("docs/kill.html")
+        self.use_settings(blacklist=["kill.html"])
+        self.assertEqual(self.rels(self.scan()), ["docs/keep.html"])
+        self.assertFalse(self.ds.view_allowed(kill))
+
+    def test_blacklist_path_beats_whitelist(self):
+        self.write("docs/keep.html")
+        self.write("old/docs/gone.html")
+        self.use_settings(blacklist=["~/old"])
+        self.assertEqual(self.rels(self.scan()), ["docs/keep.html"])
+
+    def test_folder_name_matching_is_case_insensitive(self):
+        self.write("stuff/NODE_MODULES/docs/dep.html")
+        self.write("docs/mine.html")
+        self.use_settings(blacklist=["node_modules"])
+        self.assertEqual(self.rels(self.scan()), ["docs/mine.html"])
+
+    def test_whitelisted_path_wins_over_hidden_dir_rule(self):
+        # Hidden dirs are hardcoded-off (worktree duplicates), but an explicit
+        # path rule is the user saying "this one, I mean it".
+        hidden = self.write(".stash/docs/secret.html")
+        self.write("docs/normal.html")
+        self.assertEqual(self.rels(self.scan()), ["docs/normal.html"])
+        self.use_settings(whitelist=["docs", "~/.stash/docs"])
+        self.assertEqual(self.rels(self.scan()),
+                         [".stash/docs/secret.html", "docs/normal.html"])
+        self.assertTrue(self.ds.view_allowed(hidden))
+
+    def test_whitelisted_folder_without_docs_in_path(self):
+        self.write("Documents/New project/page.html")
+        self.use_settings(whitelist=["docs", "~/Documents/New project"])
+        self.assertIn("Documents/New project/page.html", self.rels(self.scan()))
+
+    def test_whitelisted_root_inside_home_does_not_duplicate(self):
+        self.write("projects/app/docs/a.html")
+        self.use_settings(whitelist=["docs", "~/projects/app/docs"])
+        self.assertEqual(self.rels(self.scan()), ["projects/app/docs/a.html"])
+
+    def test_whitelisted_root_outside_home_gets_absolute_rel(self):
+        outside = os.path.realpath(tempfile.mkdtemp(prefix="docsearch-vol-"))
+        self.addCleanup(shutil.rmtree, outside, True)
+        with open(os.path.join(outside, "guide.html"), "w") as f:
+            f.write("<p>external</p>")
+        self.use_settings(whitelist=["docs", outside])
+        docs = self.scan()
+        hit = [d for d in docs if d["path"].startswith(outside)]
+        self.assertEqual(len(hit), 1)
+        self.assertEqual(hit[0]["rel"], hit[0]["path"])  # absolute, never ../
+        self.assertTrue(self.ds.view_allowed(hit[0]["path"]))
+
+    def test_whitelisted_single_file_rule(self):
+        target = self.write("notes/standalone.html")
+        self.write("notes/other.html")
+        self.use_settings(whitelist=["docs", "~/notes/standalone.html"])
+        self.assertEqual(self.rels(self.scan()), ["notes/standalone.html"])
+        self.assertTrue(self.ds.view_allowed(target))
+
+    def test_whitelist_filename_matches_anywhere_under_home(self):
+        self.write("random/deep/special.html")
+        self.write("random/deep/plain.html")
+        self.use_settings(whitelist=["docs", "special.html"])
+        self.assertEqual(self.rels(self.scan()), ["random/deep/special.html"])
+
+    def test_deleting_the_docs_rule_empties_the_default_corpus(self):
+        self.write("docs/a.html")
+        self.use_settings(whitelist=[])
+        self.assertEqual(self.scan(), [])
+
+
+class TestSettingsPersistence(WalkTestCase):
+
+    def test_apply_then_load_roundtrip(self):
+        self.use_settings(whitelist=["docs", "special.html"], blacklist=["node_modules"])
+        saved = self.ds._rules.doc
+        self.ds.load_settings()  # re-read from disk
+        self.assertEqual(self.ds._rules.doc, saved)
+        self.assertTrue(os.path.exists(self.ds.SETTINGS_PATH))
+
+    def test_defaults_used_when_file_absent_and_never_written(self):
+        self.assertFalse(os.path.exists(self.ds.SETTINGS_PATH))
+        self.assertEqual(self.ds._rules.doc, self.ds.DEFAULT_SETTINGS)
+
+    def test_corrupt_file_falls_back_to_defaults(self):
+        with open(self.ds.SETTINGS_PATH, "w") as f:
+            f.write("{not json")
+        self.ds.load_settings()
+        self.assertEqual(self.ds._rules.doc, self.ds.DEFAULT_SETTINGS)
+
+    def test_stale_scan_is_discarded_after_a_rules_swap(self):
+        # A stale-while-revalidate walk that started under the OLD rules must
+        # not commit over the corpus a settings change just rebuilt.
+        import threading as th
+        ds = self.ds
+        self.write("docs/a.html")
+        real_scan = ds.scan_corpus
+        started, release = th.Event(), th.Event()
+
+        def slow_scan(rules):
+            started.set()
+            release.wait(5)
+            return real_scan(rules)
+
+        ds.scan_corpus = slow_scan
+        worker = th.Thread(target=ds._rescan)
+        worker.start()
+        self.assertTrue(started.wait(5))
+        ds.scan_corpus = real_scan
+        self.use_settings(whitelist=[])   # bumps the generation
+        ds._rescan()                       # commits: empty corpus
+        release.set()
+        worker.join(5)
+        self.assertEqual(ds._corpus, [])   # stale 1-doc result was discarded
+
+
+class TestSettingsHttp(WalkTestCase):
+    """One live-server pass over the new endpoints; everything else is unit."""
+
+    def setUp(self):
+        super().setUp()
+        import http.client
+        from http.server import ThreadingHTTPServer
+        self.http = http.client
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self.ds.Handler)
+        import threading as th
+        th.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.shutdown)
+        self.port = self.server.server_address[1]
+
+    def request(self, method, path, body=None):
+        conn = self.http.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        headers = {"Content-Type": "application/json"} if body else {}
+        conn.request(method, path, body, headers)
+        resp = conn.getresponse()
+        data = resp.read()
+        conn.close()
+        return resp.status, data
+
+    def test_get_returns_current_rules(self):
+        status, data = self.request("GET", "/api/settings")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data), self.ds.DEFAULT_SETTINGS)
+
+    def test_post_applies_rules_and_rescans(self):
+        self.write("docs/a.html")
+        self.write("extra/b.html")
+        status, data = self.request("POST", "/api/settings", json.dumps(
+            {"whitelist": [{"value": "docs"}, {"value": "~/extra"}], "blacklist": []}))
+        self.assertEqual(status, 200)
+        body = json.loads(data)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["docs"], 2)
+        self.assertEqual(body["settings"]["whitelist"][1]["type"], "path")
+        status, data = self.request("GET", "/api/settings")
+        self.assertEqual(json.loads(data), body["settings"])
+
+    def test_post_garbage_is_rejected_and_rules_unchanged(self):
+        for payload in ("not json", json.dumps({"whitelist": "nope"}),
+                        json.dumps({"whitelist": [{"value": "*.html"}]})):
+            status, data = self.request("POST", "/api/settings", payload)
+            self.assertEqual(status, 400)
+            self.assertFalse(json.loads(data)["ok"])
+        self.assertEqual(self.ds._rules.doc, self.ds.DEFAULT_SETTINGS)
+        self.assertFalse(os.path.exists(self.ds.SETTINGS_PATH))
+
+    def test_post_empty_body_rejected(self):
+        status, _ = self.request("POST", "/api/settings")
+        self.assertEqual(status, 400)
 
 
 if __name__ == "__main__":

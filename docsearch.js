@@ -89,17 +89,21 @@
   /* Display label is home-relative ("~/projects/powerai/docs/runbooks"): keeps
      folders distinct without printing an absolute machine path. `rel` comes from
      the server; if it's missing we fall back to the absolute dir rather than
-     guessing at a home prefix. */
+     guessing at a home prefix. For docs outside $HOME (whitelisted roots on
+     another volume) the server sends `rel` as the absolute path — label it as
+     such rather than gluing '~/' onto it. */
   function folderLabelOf(d) {
     if (typeof d.rel === 'string' && d.rel) {
+      if (d.rel.charAt(0) === '/') return dirOf(d.rel) || '/';
       var dir = dirOf(d.rel);
       return dir ? '~/' + dir : '~';
     }
     return dirOf(d.path) || UNKNOWN_FOLDER;
   }
 
-  /* Scaffolding segments that carry no identity of their own in a heading. */
-  var STRUCTURAL = { projects: true, docs: true };
+  /* Scaffolding segments that carry no identity of their own in a heading.
+     Volumes covers absolute labels from whitelisted roots on other disks. */
+  var STRUCTURAL = { projects: true, docs: true, Volumes: true };
 
   /* '~/projects/powerai/docs/runbooks' -> parts for two-tone rendering:
      [{text:'~/projects/'},{text:'powerai',strong:true},{text:'/docs/'},{text:'runbooks',strong:true}]

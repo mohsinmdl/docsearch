@@ -251,6 +251,24 @@ launchctl kickstart -k gui/$(id -u)/com.mohsin.docsearch</pre>
 runbook&rsquo;s history section. Reverting only makes sense alongside a working Spotlight index; the
 pre-migration behaviour is precisely what was broken.</p>
 
+<h2>Follow-up: rules became user-managed (2026-07-31, later the same day)</h2>
+<p>The hardcoded include/exclude constants this runbook describes were replaced by a
+whitelist/blacklist rules engine managed from the page&rsquo;s settings modal (gear button /
+<kbd>g</kbd><kbd>s</kbd>) and persisted in <code>settings.json</code>. Defaults reproduce the
+behavior documented here exactly; the hidden-directory pruning and its worktree-duplicate
+rationale are unchanged and remain hardcoded (an explicitly whitelisted path is the only way
+through them). See the API section of <a href="doc-web-search.html">doc-web-search.html</a>.</p>
+
+<p><b>Found while verifying: iCloud dataless files.</b> Whitelisting a folder under an
+iCloud-synced <code>~/Documents</code> surfaced files whose contents were evicted to iCloud
+(placeholders: <code>stat</code> works, the bytes aren&rsquo;t local). For a launchd daemon,
+<code>open()</code> on one fails with the obscure <code>EDEADLK &mdash; Resource deadlock
+avoided</code> instead of downloading &mdash; so search listed them but <code>/view</code>
+404&rsquo;d. Fixed by opting the process into on-demand materialization at startup
+(<code>setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS, ON)</code>
+via ctypes); reading such a file now triggers the iCloud download transparently. Consequence to
+know about: a body-text search over a whitelisted iCloud folder can pull evicted files down.</p>
+
 <h2>Known limitations</h2>
 <ul>
   <li><s><b>TCC-protected folders stay invisible.</b></s> <b>Resolved 2026-07-31</b> &mdash; see
@@ -327,6 +345,11 @@ pre-migration behaviour is precisely what was broken.</p>
   <dt>Prune (in a directory walk)</dt>
   <dd>Removing a directory from the list of places to descend into, so its entire subtree is
     skipped rather than examined and discarded.</dd>
+
+  <dt>Whitelist / Blacklist</dt>
+  <dd>The two managed rule lists (settings modal, 2026-07-31 follow-up). Whitelist rules say
+    what to index &mdash; a folder name, a full path, or an exact filename; blacklist rules say
+    what never to index, and always win. Deleting a blacklist entry is the escape hatch.</dd>
 
   <dt>git worktree</dt>
   <dd>A second working directory checked out from the same git repository. Because it contains a

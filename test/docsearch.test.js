@@ -205,6 +205,16 @@ test('folder labels emphasize the identifying words, dim the scaffolding', funct
   assert.deepEqual(strongOf('~/projects/rocketchat-push-gateway/docs/runbooks'), ['rocketchat-push-gateway', 'runbooks']);
 });
 
+test('outside-HOME docs (absolute rel from a whitelisted root) label sanely', function () {
+  // The server sends `rel` as the absolute path for docs outside $HOME —
+  // the label must not become '~//Volumes/…' or bolt '~/' onto it.
+  assert.equal(DS.folderLabelOf({ path: '/Volumes/x/docs/a.html', rel: '/Volumes/x/docs/a.html' }),
+    '/Volumes/x/docs');
+  // 'Volumes' is scaffolding; the volume name is the identity.
+  const strongOf = label => DS.folderLabelParts(label).filter(p => p.strong).map(p => p.text);
+  assert.deepEqual(strongOf('/Volumes/backup/docs'), ['backup']);
+});
+
 test('folderLabelParts preserves every character and never crashes on junk', function () {
   ['~/docs', '~/projects/powerai/docs/runbooks', '~', 'unknown folder', '/Users/dev/docs'].forEach(function (label) {
     const joined = DS.folderLabelParts(label).map(p => p.text).join('');

@@ -112,7 +112,7 @@ try {
   .head-car { font-size:9px; color:var(--text-dim); width:10px; flex-shrink:0; text-align:center; }
   .head-cnt { color:var(--text-dim); font-weight:400; flex-shrink:0; }
 
-  .row { display:flex; align-items:center; gap:16px; padding:10px 12px; margin:0 -12px; border-radius:4px; background:transparent; cursor:default; border-bottom:1px solid var(--line-soft); text-decoration:none; color:inherit; }
+  .row { display:flex; align-items:center; gap:16px; padding:10px 12px; margin:0 -12px; border-radius:4px; background:transparent; cursor:pointer; border-bottom:1px solid var(--line-soft); text-decoration:none; color:inherit; }
   .row:hover { background:var(--row-hover); }
   .row.sel { background:var(--sel-bg); }
   .row:focus-visible { outline:2px solid var(--field-border-focus); outline-offset:-2px; }
@@ -140,7 +140,30 @@ try {
   .keys kbd { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; color:var(--text-sub); background:var(--key-bg); border:1px solid var(--field-border); border-radius:4px; padding:2px 6px; min-width:10px; text-align:center; }
   .keys i { font-style:normal; font-size:11px; color:var(--text-dim); }
   .keys .k-note { font-size:11px; color:var(--text-dim); }
-  #help-btn { cursor:default; }
+  #help-btn, #settings-btn { cursor:pointer; }
+
+  /* Settings modal — rules editor. Same modal shell, plus a compact input
+     row and rule list. All colors come from existing tokens, so both themes
+     are covered without new variables. */
+  .modal.wide { width:min(480px, calc(100vw - 48px)); }
+  .set-head { display:flex; align-items:center; justify-content:space-between; margin-top:10px; }
+  .set-count { font-size:11px; color:var(--text-dim); }
+  .set-desc { font-size:11px; color:var(--text-dim); margin:8px 0 10px; line-height:1.5; }
+  .set-input-row { display:flex; gap:10px; align-items:center; }
+  #set-input { flex:1; min-width:0; box-sizing:border-box; height:30px; padding:0 10px; font-size:12px; font-family:inherit; color:var(--text); background:var(--field-bg); border:1px solid var(--field-border); border-radius:5px; outline:none; }
+  #set-input:focus { border-color:var(--field-border-focus); background:var(--bg); }
+  #set-input:disabled { opacity:0.5; }
+  .set-add { font-size:12px; color:var(--text-sub); cursor:pointer; user-select:none; flex-shrink:0; }
+  .set-add:hover { color:var(--text); }
+  .set-msg { font-size:11px; border-radius:4px; padding:6px 9px; margin-top:8px; background:var(--banner-bg); border:1px solid var(--banner-border); color:var(--banner-fg); }
+  .set-list { margin-top:8px; max-height:40vh; overflow-y:auto; }
+  .set-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line-soft); }
+  .set-row:last-child { border-bottom:none; }
+  .set-val { flex:1; min-width:0; font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:12px; color:var(--text-sub); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .set-row .chip { font-size:10px; padding:2px 6px; }
+  .set-x { font-size:13px; color:var(--text-dim); cursor:pointer; padding:0 4px; flex-shrink:0; user-select:none; }
+  .set-x:hover { color:var(--text); }
+  .set-empty { font-size:12px; color:var(--text-dim); padding:10px 0; }
 
   .hidden { display:none; }
 </style>
@@ -156,6 +179,7 @@ try {
       <div class="seg" id="seg" title="Appearance — Ctrl+Shift+L toggles light/dark">
         <span data-theme-opt="auto">Auto</span><span data-theme-opt="light">Light</span><span data-theme-opt="dark">Dark</span>
       </div>
+      <div class="seg" title="Search rules — whitelist/blacklist (gs)"><span id="settings-btn">⚙</span></div>
       <div class="seg" title="Keyboard shortcuts (?)"><span id="help-btn">?</span></div>
     </div>
   </header>
@@ -175,9 +199,30 @@ try {
       <div class="sc-row"><span>Group by date</span><span class="keys"><kbd>g</kbd><kbd>d</kbd></span></div>
       <div class="sc-row"><span>Expand all</span><span class="keys"><kbd>g</kbd><kbd>e</kbd></span></div>
       <div class="sc-row"><span>Collapse all</span><span class="keys"><kbd>g</kbd><kbd>c</kbd></span></div>
+      <div class="sc-sec">Settings</div>
+      <div class="sc-row"><span>Search rules (whitelist / blacklist)</span><span class="keys"><kbd>g</kbd><kbd>s</kbd></span></div>
       <div class="sc-sec">Appearance</div>
       <div class="sc-row"><span>Toggle light / dark</span><span class="keys"><kbd>⌃⇧L</kbd></span></div>
       <div class="sc-row"><span>This panel</span><span class="keys"><kbd>?</kbd></span></div>
+    </div>
+  </div>
+
+  <div class="modal-wrap hidden" id="settings">
+    <div class="modal wide" role="dialog" aria-label="Search rules">
+      <div class="modal-title">Search rules</div>
+      <div class="set-head">
+        <div class="seg" id="set-tabs">
+          <span data-settings-tab="whitelist" class="on">Whitelist</span><span data-settings-tab="blacklist">Blacklist</span>
+        </div>
+        <span class="set-count" id="set-count"></span>
+      </div>
+      <div class="set-desc" id="set-desc"></div>
+      <div class="set-input-row">
+        <input type="text" id="set-input" autocomplete="off" spellcheck="false">
+        <a class="set-add" id="set-add">Add</a>
+      </div>
+      <div class="set-msg hidden" id="set-msg"></div>
+      <div class="set-list" id="set-list"></div>
     </div>
   </div>
 
@@ -220,6 +265,15 @@ try {
   var bulkEl = document.getElementById('bulk');
   var helpEl = document.getElementById('help');
   var helpBtn = document.getElementById('help-btn');
+  var settingsEl = document.getElementById('settings');
+  var settingsBtn = document.getElementById('settings-btn');
+  var setTabsEl = document.getElementById('set-tabs');
+  var setCountEl = document.getElementById('set-count');
+  var setDescEl = document.getElementById('set-desc');
+  var setInputEl = document.getElementById('set-input');
+  var setAddEl = document.getElementById('set-add');
+  var setMsgEl = document.getElementById('set-msg');
+  var setListEl = document.getElementById('set-list');
 
   /* /docsearch.js is served by this same server, so a 404 here almost always
      means the process is running older code than the page on disk. Say that,
@@ -292,9 +346,156 @@ try {
   applyGroupPref(getGroupPref());
 
   // ── shortcuts modal (?, header button; Esc / backdrop / ? closes) ──
-  function showHelp(on) { helpEl.classList.toggle('hidden', !on); }
+  function showHelp(on) {
+    if (on) showSettings(false); // one modal at a time
+    helpEl.classList.toggle('hidden', !on);
+  }
   helpBtn.addEventListener('click', function () { showHelp(helpEl.classList.contains('hidden')); });
   helpEl.addEventListener('click', function (e) { if (e.target === helpEl) showHelp(false); });
+
+  // ── settings modal (gear, gs) — whitelist/blacklist rules editor ──
+  /* The rules live server-side (settings.json): the SERVER detects each
+     entry's type and does the matching, this panel only displays the
+     canonical doc it returns and POSTs the whole doc back on every add or
+     remove. Mutations apply immediately — each one rescans (~2s) — so the
+     input is disabled while one is in flight rather than queueing edits. */
+  var settings = null;      // canonical {version, whitelist, blacklist} from the server
+  var activeTab = 'whitelist';
+  var setBusy = false;
+  var SET_DESC = {
+    whitelist: 'What gets indexed: a folder name (docs), a full path (~/Documents/Codex), or an exact filename (report.html).',
+    blacklist: 'Never indexed, even when whitelisted: folder names, paths, or exact filenames. Blacklist wins.'
+  };
+
+  function showSettings(on) {
+    if (on) {
+      helpEl.classList.add('hidden'); // one modal at a time
+      settingsEl.classList.remove('hidden');
+      loadSettings();
+      setInputEl.focus();
+    } else if (!settingsEl.classList.contains('hidden')) {
+      // only restore focus when actually closing — showHelp calls this
+      // unconditionally, and a no-op close must not steal focus to #q
+      settingsEl.classList.add('hidden');
+      qEl.focus();
+    }
+  }
+  settingsBtn.addEventListener('click', function () { showSettings(settingsEl.classList.contains('hidden')); });
+  settingsEl.addEventListener('click', function (e) { if (e.target === settingsEl) showSettings(false); });
+
+  setTabsEl.addEventListener('click', function (e) {
+    var t = e.target.getAttribute && e.target.getAttribute('data-settings-tab');
+    if (!t || t === activeTab) return;
+    activeTab = t;
+    renderSettings();
+    setInputEl.focus();
+  });
+
+  function setMsg(text) {
+    setMsgEl.textContent = text || '';
+    setMsgEl.classList.toggle('hidden', !text);
+  }
+
+  function renderSettings() {
+    var opts = setTabsEl.querySelectorAll('[data-settings-tab]');
+    for (var i = 0; i < opts.length; i++) {
+      opts[i].classList.toggle('on', opts[i].getAttribute('data-settings-tab') === activeTab);
+    }
+    setDescEl.textContent = SET_DESC[activeTab];
+    setInputEl.placeholder = activeTab === 'whitelist' ? 'docs, ~/path, or name.html' : 'node_modules, ~/path, or name.html';
+    setListEl.textContent = '';
+    setCountEl.textContent = '';
+    if (!settings) { setListEl.appendChild(setEmptyEl('Loading rules…')); return; }
+    var rules = settings[activeTab];
+    setCountEl.textContent = rules.length + (rules.length === 1 ? ' rule' : ' rules');
+    if (!rules.length) {
+      setListEl.appendChild(setEmptyEl(activeTab === 'whitelist'
+        ? 'No whitelist rules — nothing will be indexed.'
+        : 'No blacklist rules.'));
+      return;
+    }
+    rules.forEach(function (rule, idx) {
+      var row = document.createElement('div'); row.className = 'set-row';
+      var chip = document.createElement('span');
+      chip.className = 'chip ' + (activeTab === 'whitelist' ? 'green' : 'amber');
+      chip.textContent = rule.type === 'folder-name' ? 'folder' : rule.type === 'filename' ? 'file' : 'path';
+      var val = document.createElement('span'); val.className = 'set-val';
+      val.textContent = rule.value;
+      val.title = rule.value;
+      var x = document.createElement('a'); x.className = 'set-x';
+      x.textContent = '×';
+      x.title = 'Remove this rule';
+      x.addEventListener('click', function () { removeRule(idx); });
+      row.appendChild(chip); row.appendChild(val); row.appendChild(x);
+      setListEl.appendChild(row);
+    });
+  }
+  function setEmptyEl(text) {
+    var el = document.createElement('div'); el.className = 'set-empty';
+    el.textContent = text;
+    return el;
+  }
+
+  function loadSettings() {
+    fetch('/api/settings')
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (doc) { settings = doc; setMsg(''); renderSettings(); })
+      .catch(function () { setMsg('Could not load rules — is the server running?'); });
+  }
+
+  function postSettings(doc) {
+    if (setBusy) return;
+    setBusy = true;
+    setInputEl.disabled = true;
+    setMsg('Rescanning…');
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(doc)
+    })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.body.ok) throw new Error(res.body.error || 'save failed');
+        // Repaint from the server's canonical doc — detection/normalization
+        // may have rewritten what was typed — then refresh the list behind.
+        settings = res.body.settings;
+        setInputEl.value = '';
+        setMsg(res.body.warnings && res.body.warnings.length ? res.body.warnings.join(' · ') : '');
+        renderSettings();
+        search(qEl.value.trim());
+      })
+      .catch(function (err) { setMsg(String(err.message || err)); })
+      .then(function () {
+        setBusy = false;
+        setInputEl.disabled = false;
+        setInputEl.focus();
+      });
+  }
+
+  function cloneSettings() {
+    return {
+      version: 1,
+      whitelist: settings.whitelist.slice(),
+      blacklist: settings.blacklist.slice()
+    };
+  }
+  function addRule() {
+    var raw = setInputEl.value.trim();
+    if (!raw || !settings || setBusy) return;
+    var doc = cloneSettings();
+    doc[activeTab] = doc[activeTab].concat([{ value: raw }]); // server detects the type
+    postSettings(doc);
+  }
+  function removeRule(idx) {
+    if (!settings || setBusy) return;
+    var doc = cloneSettings();
+    doc[activeTab] = doc[activeTab].slice(0, idx).concat(doc[activeTab].slice(idx + 1));
+    postSettings(doc);
+  }
+  setAddEl.addEventListener('click', addRule);
+  setInputEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); addRule(); }
+  });
 
   /* Expand/collapse every heading at once — folder and date heads alike. */
   function setAllHeads(open) {
@@ -446,8 +647,17 @@ try {
   // ── keyboard ──
   var pendingG = 0; // timestamp of a 'g' awaiting its chord partner (gf/gd/ge/gc)
   window.addEventListener('keydown', function (e) {
-    /* Modal swallows the keyboard while open: Esc or ? dismisses, the rest
-       must not reach the list/search behind it. */
+    /* Settings modal first: Esc closes, everything else passes through
+       untouched (NO preventDefault) — its text input needs real typing, and
+       returning here keeps /, ⌘K, ?, g-chords and especially Enter (which
+       would navigate to the selected row) from leaking to the page. Enter for
+       the modal is handled on the input's own listener. */
+    if (!settingsEl.classList.contains('hidden')) {
+      if (e.key === 'Escape') { e.preventDefault(); showSettings(false); }
+      return;
+    }
+    /* Help modal swallows the keyboard while open: Esc or ? dismisses, the
+       rest must not reach the list/search behind it. */
     if (!helpEl.classList.contains('hidden')) {
       if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); showHelp(false); }
       return;
@@ -464,6 +674,7 @@ try {
         pendingG = 0;
         if (ck === 'f' || ck === 'd') { e.preventDefault(); toggleGroup(ck === 'f' ? 'folder' : 'date'); return; }
         if (ck === 'e' || ck === 'c') { e.preventDefault(); setAllHeads(ck === 'e'); return; }
+        if (ck === 's') { e.preventDefault(); showSettings(true); return; }
       }
       if (ck === 'g') { pendingG = Date.now(); e.preventDefault(); return; }
     }
