@@ -6,7 +6,7 @@
 	<string>com.mohsin.docsearch</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/bin/python3</string>
+		<string>/opt/homebrew/bin/python3</string>
 		<string>/Users/dev/projects/docsearch/docsearch-server.py</string>
 	</array>
 	<key>RunAtLoad</key>

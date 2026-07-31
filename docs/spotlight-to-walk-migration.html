@@ -205,6 +205,42 @@ duplicates of documents already listed.</p>
 </ol>
 </div>
 
+<h2>Follow-up: the LaunchAgent interpreter (2026-07-31)</h2>
+
+<p>The first scans under the new engine reported six folders it could not read:</p>
+<pre>scan: 72 docs, unreadable: Desktop, Documents, Downloads, Movies, Music, Pictures</pre>
+
+<p>These are the TCC-protected folders. The LaunchAgent ran <code>/usr/bin/python3</code>, which
+is <b>not an interpreter but a shim</b> &mdash; it re-executes whichever Python lives in the
+active developer directory, so the process in <code>ps</code> was Xcode&rsquo;s:</p>
+<pre>plist:            /usr/bin/python3
+ps:               /Applications/Xcode.app/&hellip;/Python3.framework/Versions/3.9/&hellip;/Python
+xcode-select -p:  /Applications/Xcode.app/Contents/Developer</pre>
+
+<p>That indirection is why an earlier attempt to grant Full Disk Access appeared to do nothing:
+the binary named in Privacy &amp; Security and the binary actually being denied were not reliably
+the same, and a TCC grant keyed to Xcode&rsquo;s Python would break on the next Xcode update
+anyway.</p>
+
+<p><b>Fix:</b> point <code>ProgramArguments</code> at Homebrew&rsquo;s Python
+(<code>/opt/homebrew/bin/python3</code>, 3.14.6) &mdash; a real binary at a stable path,
+independent of Xcode. Because <code>ProgramArguments</code> changed, the agent needs a genuine
+reload; <code>kickstart</code> alone does not re-read the plist:</p>
+<pre>cp ~/projects/docsearch/com.mohsin.docsearch.plist ~/Library/LaunchAgents/
+launchctl bootout   gui/$(id -u)/com.mohsin.docsearch
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mohsin.docsearch.plist</pre>
+
+<p><b>Result: no Full Disk Access grant was needed.</b> Homebrew&rsquo;s Python already holds the
+access, and the <code>unreadable:</code> list disappeared on the first scan under it. Verified by
+writing a probe file to <code>~/Documents/docs/</code> and searching for a token that appears only
+in its body &mdash; the daemon returned it, proving it both walked and <em>read</em> a protected
+folder. Probe removed afterwards.</p>
+
+<p class="small">Caveat: a Homebrew major-version upgrade replaces the binary behind
+<code>/opt/homebrew/bin/python3</code>. If the <code>unreadable:</code> list ever returns to the
+scan log, that is the first thing to check. Note also that the first request after a restart can
+arrive before the startup scan finishes and the socket opens &mdash; give it ~3&nbsp;s.</p>
+
 <h2>Rollback</h2>
 <pre>cd ~/projects/docsearch
 git log --oneline -3                 # find the walk-engine commit
@@ -217,16 +253,9 @@ pre-migration behaviour is precisely what was broken.</p>
 
 <h2>Known limitations</h2>
 <ul>
-  <li><b>TCC-protected folders stay invisible.</b> The scan log now names them:
-    <code>scan: 71 docs, unreadable: Desktop, Documents, Downloads, Movies, Music, Pictures</code>.
-    Anything under <code>~/Documents</code> (e.g. Codex runbooks) will not be listed until the
-    daemon&rsquo;s interpreter is granted Full Disk Access. Note the LaunchAgent runs
-    <code>/usr/bin/python3</code>, which is a shim that re-executes the Python inside the active
-    developer directory &mdash; so the process you see in <code>ps</code> is Xcode&rsquo;s Python.
-    That mismatch is why an earlier Full Disk Access grant appeared to do nothing. Protection
-    follows a file&rsquo;s <em>real</em> location, so symlinking out of <code>~/Documents</code>
-    does not help. The permission-free workaround remains: keep runbooks under
-    <code>~/docs/</code> or <code>~/projects/**/docs/</code>.</li>
+  <li><s><b>TCC-protected folders stay invisible.</b></s> <b>Resolved 2026-07-31</b> &mdash; see
+    the interpreter switch below. Every folder is now readable; the scan line is a plain
+    <code>scan: 72 docs</code> with no <code>unreadable:</code> list.</li>
   <li><b>Symlinked docs trees are not followed</b> (<code>followlinks=False</code>) &mdash; same
     practical behaviour as before.</li>
   <li><b>No phrase queries.</b> Spotlight&rsquo;s <code>"exact phrase"</code> quoting and its
