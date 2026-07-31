@@ -62,6 +62,7 @@ try {
   .page { min-height:100vh; background:var(--bg); display:flex; flex-direction:column; }
   header { padding:10px 24px; border-bottom:1px solid var(--line-soft); display:flex; align-items:center; justify-content:space-between; }
   .brand { font-size:13px; font-weight:500; color:var(--text-sub); letter-spacing:0.2px; }
+  .segs { display:flex; gap:8px; }
   .seg { display:flex; gap:2px; background:var(--seg-track); border-radius:5px; padding:2px; }
   .seg span { font-size:11px; font-weight:500; color:var(--text-dim); background:transparent; border-radius:3px; padding:3px 9px; cursor:default; user-select:none; }
   .seg span.on { color:var(--text); background:var(--seg-sel-bg); }
@@ -79,16 +80,47 @@ try {
   .banner code { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; background:var(--banner-code-bg); border-radius:3px; padding:1px 5px; }
 
   .status-wrap { padding:16px 24px 8px; display:flex; justify-content:center; }
-  .status-wrap span { width:100%; max-width:720px; font-size:12px; color:var(--text-dim); }
+  .status-row { width:100%; max-width:720px; display:flex; align-items:baseline; gap:12px; font-size:12px; }
+  #status { flex:1; min-width:0; color:var(--text-dim); }
+  .bulk { flex-shrink:0; color:var(--text-dim); display:flex; gap:7px; user-select:none; }
+  .bulk a { color:var(--text-sub); cursor:pointer; }
+  .bulk a:hover { color:var(--text); }
+  .bulk i { font-style:normal; }
 
   .list-wrap { padding:0 24px 28px; display:flex; justify-content:center; }
   .list { width:100%; max-width:720px; display:flex; flex-direction:column; }
   .empty { padding:56px 0; display:flex; flex-direction:column; align-items:center; gap:8px; }
   .empty .t { font-size:14px; font-weight:500; color:var(--text-sub); }
   .empty .h { font-size:12px; color:var(--text-dim); }
-  .row { display:flex; align-items:center; gap:16px; padding:10px 12px; margin:0 -12px; border-radius:4px; background:transparent; cursor:default; border-bottom:1px solid var(--line-soft); }
+  /* Folder ── date ── rows. Headings lean on the existing type/color tokens and
+     stay quiet enough that the rows remain the thing you scan. Heads are
+     collapsible: caret + count, click to expand. */
+  /* Heads hover and pad like .row (same negative-margin band), so the whole
+     line reads as the click target it is — not just the label text. */
+  .folder-head { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; font-weight:500; color:var(--text-sub); margin:12px -12px 0; padding:14px 12px 9px; border-top:1px solid var(--line); border-radius:4px; display:flex; align-items:center; gap:7px; cursor:pointer; user-select:none; }
+  .list > .folder-head:first-child { margin-top:0; padding-top:9px; border-top:none; }
+  .date-head { font-size:11px; font-weight:500; color:var(--text-dim); margin:4px -12px 0; padding:7px 12px 6px; border-radius:4px; display:flex; align-items:center; gap:7px; cursor:pointer; user-select:none; }
+  .date-head.top { margin-top:12px; padding-top:14px; padding-bottom:9px; border-top:1px solid var(--line); color:var(--text-sub); }
+  .list > .date-head.top:first-child { margin-top:0; padding-top:9px; border-top:none; }
+  .folder-head:hover, .date-head:hover { background:var(--row-hover); }
+  .head-lbl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .date-head:hover .head-lbl { color:var(--text); }
+  /* Two-tone folder paths: scaffolding recedes, identity segments lead. */
+  .head-lbl .seg-dim { color:var(--text-dim); font-weight:400; }
+  .head-lbl .seg-strong { color:var(--text); font-weight:600; }
+  .folder-head:hover .seg-dim { color:var(--text-sub); }
+  .head-car { font-size:9px; color:var(--text-dim); width:10px; flex-shrink:0; text-align:center; }
+  .head-cnt { color:var(--text-dim); font-weight:400; flex-shrink:0; }
+
+  .row { display:flex; align-items:center; gap:16px; padding:10px 12px; margin:0 -12px; border-radius:4px; background:transparent; cursor:default; border-bottom:1px solid var(--line-soft); text-decoration:none; color:inherit; }
   .row:hover { background:var(--row-hover); }
   .row.sel { background:var(--sel-bg); }
+  .row:focus-visible { outline:2px solid var(--field-border-focus); outline-offset:-2px; }
+  @media (max-width:520px) {
+    .row { gap:10px; align-items:flex-start; }
+    .row .hint { display:none; }
+    .row .chip { align-self:center; }
+  }
   .row .txt { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
   .row .title { font-size:14px; font-weight:500; color:var(--text); }
   .row .path { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -96,6 +128,20 @@ try {
   .row .chip { flex-shrink:0; font-size:11px; font-weight:500; padding:3px 8px; border-radius:4px; }
   .chip.green { background:var(--chip-green-bg); color:var(--chip-green-fg); }
   .chip.amber { background:var(--chip-amber-bg); color:var(--chip-amber-fg); }
+  /* Shortcuts modal — same tokens as the rest of the page. */
+  .modal-wrap { position:fixed; inset:0; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; z-index:10; }
+  .modal { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:18px 20px 14px; width:min(400px, calc(100vw - 48px)); max-height:calc(100vh - 96px); overflow-y:auto; box-shadow:0 12px 40px rgba(0,0,0,0.25); }
+  .modal-title { font-size:13px; font-weight:600; color:var(--text); margin-bottom:4px; }
+  .sc-sec { font-size:11px; font-weight:500; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.4px; margin:14px 0 4px; }
+  .sc-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:5px 0; border-bottom:1px solid var(--line-soft); }
+  .sc-row:last-child { border-bottom:none; }
+  .sc-row > span:first-child { font-size:13px; color:var(--text-sub); }
+  .keys { display:flex; align-items:center; gap:4px; flex-shrink:0; }
+  .keys kbd { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; color:var(--text-sub); background:var(--key-bg); border:1px solid var(--field-border); border-radius:4px; padding:2px 6px; min-width:10px; text-align:center; }
+  .keys i { font-style:normal; font-size:11px; color:var(--text-dim); }
+  .keys .k-note { font-size:11px; color:var(--text-dim); }
+  #help-btn { cursor:default; }
+
   .hidden { display:none; }
 </style>
 </head>
@@ -103,10 +149,37 @@ try {
 <div class="page">
   <header>
     <span class="brand">docsearch</span>
-    <div class="seg" id="seg" title="Appearance — Ctrl+Shift+L toggles light/dark">
-      <span data-theme-opt="auto">Auto</span><span data-theme-opt="light">Light</span><span data-theme-opt="dark">Dark</span>
+    <div class="segs">
+      <div class="seg" id="grp" title="Group the list by folder (gf) and/or date (gd) — click a heading to expand it; both off = flat newest-first">
+        <span data-group-opt="folder">Folder</span><span data-group-opt="date">Date</span>
+      </div>
+      <div class="seg" id="seg" title="Appearance — Ctrl+Shift+L toggles light/dark">
+        <span data-theme-opt="auto">Auto</span><span data-theme-opt="light">Light</span><span data-theme-opt="dark">Dark</span>
+      </div>
+      <div class="seg" title="Keyboard shortcuts (?)"><span id="help-btn">?</span></div>
     </div>
   </header>
+
+  <div class="modal-wrap hidden" id="help">
+    <div class="modal" role="dialog" aria-label="Keyboard shortcuts">
+      <div class="modal-title">Keyboard shortcuts</div>
+      <div class="sc-sec">Search</div>
+      <div class="sc-row"><span>Focus search</span><span class="keys"><kbd>⌘K</kbd><i>or</i><kbd>/</kbd></span></div>
+      <div class="sc-row"><span>Clear · leave · return to search</span><span class="keys"><kbd>esc</kbd></span></div>
+      <div class="sc-sec">List</div>
+      <div class="sc-row"><span>Move selection</span><span class="keys"><kbd>↑</kbd><kbd>↓</kbd></span></div>
+      <div class="sc-row"><span>Open selected runbook</span><span class="keys"><kbd>↩</kbd></span></div>
+      <div class="sc-row"><span>Open in new tab</span><span class="keys"><kbd>⌘</kbd><i>+</i><span class="k-note">click</span></span></div>
+      <div class="sc-sec">Grouping</div>
+      <div class="sc-row"><span>Group by folder</span><span class="keys"><kbd>g</kbd><kbd>f</kbd></span></div>
+      <div class="sc-row"><span>Group by date</span><span class="keys"><kbd>g</kbd><kbd>d</kbd></span></div>
+      <div class="sc-row"><span>Expand all</span><span class="keys"><kbd>g</kbd><kbd>e</kbd></span></div>
+      <div class="sc-row"><span>Collapse all</span><span class="keys"><kbd>g</kbd><kbd>c</kbd></span></div>
+      <div class="sc-sec">Appearance</div>
+      <div class="sc-row"><span>Toggle light / dark</span><span class="keys"><kbd>⌃⇧L</kbd></span></div>
+      <div class="sc-row"><span>This panel</span><span class="keys"><kbd>?</kbd></span></div>
+    </div>
+  </div>
 
   <div class="center">
     <div class="field-wrap">
@@ -122,22 +195,50 @@ try {
     </div>
   </div>
 
-  <div class="status-wrap"><span id="status">…</span></div>
+  <div class="status-wrap">
+    <div class="status-row">
+      <span id="status">…</span>
+      <span class="bulk hidden" id="bulk"><a data-bulk="expand" title="ge">Expand all</a><i>·</i><a data-bulk="collapse" title="gc">Collapse all</a></span>
+    </div>
+  </div>
 
   <div class="list-wrap">
     <div class="list" id="list"></div>
   </div>
 </div>
 
+<script src="/docsearch.js"></script>
 <script>
 (function () {
+  var DS = window.docsearch;
   var qEl = document.getElementById('q');
   var listEl = document.getElementById('list');
   var statusEl = document.getElementById('status');
   var bannerEl = document.getElementById('banner');
   var segEl = document.getElementById('seg');
+  var grpEl = document.getElementById('grp');
+  var bulkEl = document.getElementById('bulk');
+  var helpEl = document.getElementById('help');
+  var helpBtn = document.getElementById('help-btn');
 
-  var docs = [];          // last successful results [{path, mtime}]
+  /* /docsearch.js is served by this same server, so a 404 here almost always
+     means the process is running older code than the page on disk. Say that,
+     rather than letting it surface as a misleading "server isn't responding". */
+  if (!DS) {
+    bannerEl.classList.remove('hidden');
+    bannerEl.querySelector('b').textContent = 'docsearch.js failed to load';
+    bannerEl.querySelector('span').textContent =
+      '— the server is running older code than this page; restart it: launchctl kickstart -k gui/$(id -u)/com.mohsin.docsearch';
+    statusEl.textContent = '';
+    return;
+  }
+
+  var docs = [];          // last successful results [{path, rel, mtime}]
+  var groupBy = { folder: false, date: false }; // independent toggles; both off = the original flat list
+  var items = [];         // full render list from buildList, rebuilt in setDocs
+  var visible = [];       // items minus collapsed content — what actually paints
+  var expanded = Object.create(null); // head id -> true; heads start collapsed
+  var flat = [];          // visible docs in painted order — the index space for `sel`
   var sel = 0;
   var offline = false;
   var lastIndexed = null; // Date of last successful fetch
@@ -159,28 +260,90 @@ try {
   });
   applyTheme(getTheme());
 
-  // ── helpers ──
-  function titleOf(path) {
-    var base = path.split('/').pop().replace(/\.html?$/i, '');
-    return base.replace(/[-_]+/g, ' ').trim();
+  // ── grouping (independent Folder/Date toggles, persisted like the theme) ──
+  function getGroupPref() {
+    var v;
+    try { v = localStorage.getItem('docsearch-group'); } catch (e) { v = null; }
+    if (v === 'grouped') v = 'folder,date'; // value from the short-lived single Grouped toggle
+    if (!v || v === 'flat') return { folder: false, date: false };
+    return { folder: v.indexOf('folder') !== -1, date: v.indexOf('date') !== -1 };
   }
-  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  function fmtDate(mtime) {
-    var d = new Date(mtime * 1000);
-    var hh = ('0' + d.getHours()).slice(-2), mm = ('0' + d.getMinutes()).slice(-2);
-    return MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + hh + ':' + mm;
+  function applyGroupPref(p) {
+    groupBy = p;
+    var opts = grpEl.querySelectorAll('[data-group-opt]');
+    for (var i = 0; i < opts.length; i++) {
+      var k = opts[i].getAttribute('data-group-opt');
+      opts[i].classList.toggle('on', !!p[k]);
+    }
   }
-  function isRecent(mtime) { return (Date.now() / 1000 - mtime) < 7 * 24 * 3600; } // green chip: modified within 7 days
+  function toggleGroup(k) {
+    var p = { folder: groupBy.folder, date: groupBy.date };
+    p[k] = !p[k];
+    var v = [p.folder ? 'folder' : '', p.date ? 'date' : ''].filter(Boolean).join(',');
+    try { localStorage.setItem('docsearch-group', v); } catch (e) {}
+    applyGroupPref(p);
+    setDocs(docs);
+    render();
+  }
+  grpEl.addEventListener('click', function (e) {
+    var k = e.target.getAttribute && e.target.getAttribute('data-group-opt');
+    if (k) toggleGroup(k);
+  });
+  applyGroupPref(getGroupPref());
+
+  // ── shortcuts modal (?, header button; Esc / backdrop / ? closes) ──
+  function showHelp(on) { helpEl.classList.toggle('hidden', !on); }
+  helpBtn.addEventListener('click', function () { showHelp(helpEl.classList.contains('hidden')); });
+  helpEl.addEventListener('click', function (e) { if (e.target === helpEl) showHelp(false); });
+
+  /* Expand/collapse every heading at once — folder and date heads alike. */
+  function setAllHeads(open) {
+    if (open) {
+      items.forEach(function (it) {
+        if (it.kind !== 'doc') expanded[it.id] = true;
+      });
+    } else {
+      expanded = Object.create(null);
+    }
+    reshape();
+    render();
+  }
+  bulkEl.addEventListener('click', function (e) {
+    var action = e.target.getAttribute && e.target.getAttribute('data-bulk');
+    if (action) setAllHeads(action === 'expand');
+  });
+
+  /* Titles, dates, grouping and row markup live in docsearch.js (window.docsearch). */
+
+  // ── data shaping ──
+  function isExpanded(id) { return !!expanded[id]; }
+
+  /* reshape = collapse filter only (runs on every head click); setDocs = full
+     regroup (new results or toggle flip). Kept apart so expanding a folder
+     never re-parses every mtime, and arrow-key renders re-parse nothing.
+     With both toggles off, buildList returns the server's order untouched —
+     the original flat list. */
+  function reshape() {
+    visible = DS.visibleItems(items, isExpanded);
+    flat = DS.docsOf(visible);
+    sel = Math.min(Math.max(sel, 0), Math.max(flat.length - 1, 0));
+  }
+  function setDocs(data) {
+    docs = Array.isArray(data) ? data : [];
+    items = DS.buildList(docs, groupBy);
+    reshape();
+  }
 
   // ── rendering ──
   function render() {
     bannerEl.classList.toggle('hidden', !offline);
+    bulkEl.classList.toggle('hidden', !(groupBy.folder || groupBy.date) || !docs.length || offline);
     listEl.textContent = '';
     var q = qEl.value.trim();
 
     if (offline) {
       statusEl.textContent = docs.length
-        ? docs.length + ' runbooks · last indexed ' + (lastIndexed ? fmtDate(lastIndexed.getTime() / 1000) : '—')
+        ? docs.length + ' runbooks · last indexed ' + (lastIndexed ? DS.stampOf(lastIndexed.getTime() / 1000) : '—')
         : 'server offline';
     } else if (q) {
       statusEl.textContent = docs.length + (docs.length === 1 ? ' match' : ' matches') + ' for “' + q + '”';
@@ -200,43 +363,76 @@ try {
       return;
     }
 
-    docs.forEach(function (d, i) {
-      var row = document.createElement('div');
-      row.className = 'row' + (i === sel ? ' sel' : '');
-      var txt = document.createElement('div'); txt.className = 'txt';
-      var title = document.createElement('div'); title.className = 'title'; title.textContent = titleOf(d.path);
-      var path = document.createElement('div'); path.className = 'path'; path.textContent = d.path;
-      txt.appendChild(title); txt.appendChild(path);
-      row.appendChild(txt);
-      if (i === sel) {
-        var hint = document.createElement('span'); hint.className = 'hint'; hint.textContent = '↩ open';
-        row.appendChild(hint);
+    var i = 0;
+    visible.forEach(function (it) {
+      if (it.kind === 'doc') {
+        // With folder heads on, the folder lives in the heading and the row
+        // shows just the filename; otherwise the full path, as it always was.
+        listEl.appendChild(DS.createRow(document, it.doc, {
+          selected: i === sel,
+          pathText: groupBy.folder ? '' : it.doc.path
+        }));
+        i++;
+      } else {
+        listEl.appendChild(headEl(it));
       }
-      var chip = document.createElement('span');
-      chip.className = 'chip ' + (isRecent(d.mtime) ? 'green' : 'amber');
-      chip.textContent = fmtDate(d.mtime);
-      row.appendChild(chip);
-      row.addEventListener('click', function () { openDoc(d); });
-      listEl.appendChild(row);
     });
   }
 
-  function openDoc(d) { window.open('/view?p=' + encodeURIComponent(d.path), '_blank'); }
+  function headEl(it) {
+    var h = document.createElement('div');
+    h.className = it.kind === 'folder-head'
+      ? 'folder-head'
+      : 'date-head' + (groupBy.folder ? '' : ' top'); // top-level date heads get the folder-head separator
+    var car = document.createElement('span'); car.className = 'head-car';
+    car.textContent = expanded[it.id] ? '▾' : '▸';
+    var lbl = document.createElement('span'); lbl.className = 'head-lbl';
+    if (it.kind === 'folder-head') {
+      // Two-tone path: scaffolding (~/projects/, /docs/) dims, the project
+      // name and the sub-area after docs carry the weight.
+      DS.folderLabelParts(it.label).forEach(function (p) {
+        var s = document.createElement('span');
+        s.className = p.strong ? 'seg-strong' : 'seg-dim';
+        s.textContent = p.text;
+        lbl.appendChild(s);
+      });
+    } else {
+      lbl.textContent = it.label;
+    }
+    var cnt = document.createElement('span'); cnt.className = 'head-cnt';
+    cnt.textContent = it.count;
+    h.appendChild(car); h.appendChild(lbl); h.appendChild(cnt);
+    if (it.kind === 'folder-head') h.title = it.key; // full path on hover
+    h.addEventListener('click', function () {
+      expanded[it.id] = !expanded[it.id];
+      reshape();
+      render();
+    });
+    return h;
+  }
+
+  /* Rows are plain <a href="/view/...">: same-tab click, Cmd/Ctrl-click,
+     middle-click and focus all come from the browser, so there is no click
+     handler here. They point at /view (not file://) because a file:// link from
+     this http page would be blocked. */
 
   // ── data ──
+  /* The catch covers the fetch only. Anything thrown while shaping or painting
+     the results is a bug, and must not be repackaged as "server offline" — let
+     it reach the console. */
   function search(q) {
     var seq = ++reqSeq;
     fetch('/search?q=' + encodeURIComponent(q))
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function (data) {
-        if (seq !== reqSeq) return; // stale response
-        docs = data; offline = false; lastIndexed = new Date();
-        sel = Math.min(sel, Math.max(docs.length - 1, 0));
-        render();
-      })
       .catch(function () {
-        if (seq !== reqSeq) return;
+        if (seq !== reqSeq) return null;
         offline = true;
+        render();
+        return null;
+      })
+      .then(function (data) {
+        if (seq !== reqSeq || data === null) return; // stale, or already handled as offline
+        setDocs(data); offline = false; lastIndexed = new Date();
         render();
       });
   }
@@ -248,8 +444,29 @@ try {
   });
 
   // ── keyboard ──
+  var pendingG = 0; // timestamp of a 'g' awaiting its chord partner (gf/gd/ge/gc)
   window.addEventListener('keydown', function (e) {
+    /* Modal swallows the keyboard while open: Esc or ? dismisses, the rest
+       must not reach the list/search behind it. */
+    if (!helpEl.classList.contains('hidden')) {
+      if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); showHelp(false); }
+      return;
+    }
+    if (e.key === '?' && document.activeElement !== qEl) { e.preventDefault(); showHelp(true); return; }
+
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); qEl.focus(); return; }
+
+    /* g-chords — only while not typing in the search field, so queries like
+       "gateway" stay typable. Esc Esc gets you out of the field. */
+    if (document.activeElement !== qEl && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      var ck = e.key.toLowerCase();
+      if (pendingG && Date.now() - pendingG < 800) {
+        pendingG = 0;
+        if (ck === 'f' || ck === 'd') { e.preventDefault(); toggleGroup(ck === 'f' ? 'folder' : 'date'); return; }
+        if (ck === 'e' || ck === 'c') { e.preventDefault(); setAllHeads(ck === 'e'); return; }
+      }
+      if (ck === 'g') { pendingG = Date.now(); e.preventDefault(); return; }
+    }
     if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
       e.preventDefault();
       var t = getTheme();
@@ -259,10 +476,20 @@ try {
       return;
     }
     if (e.key === '/' && document.activeElement !== qEl) { e.preventDefault(); qEl.focus(); return; }
-    if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, Math.max(docs.length - 1, 0)); render(); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, Math.max(flat.length - 1, 0)); render(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); render(); }
-    else if (e.key === 'Enter') { if (docs[sel]) openDoc(docs[sel]); }
-    else if (e.key === 'Escape') { qEl.value = ''; sel = 0; search(''); qEl.focus(); }
+    else if (e.key === 'Enter') {
+      // Same-tab, same destination as clicking the selected row.
+      var href = flat[sel] && DS.hrefFor(flat[sel].path);
+      if (href) window.location.assign(href);
+    }
+    else if (e.key === 'Escape') {
+      // Two-stage: first Esc clears the query, second blurs the field so the
+      // g-chords work; Esc with an idle empty field refocuses it.
+      if (qEl.value) { qEl.value = ''; sel = 0; search(''); }
+      else if (document.activeElement === qEl) qEl.blur();
+      else qEl.focus();
+    }
   });
 
   // initial load: empty query = all runbooks, newest first (dashboard mode)

@@ -16,13 +16,14 @@ import re
 import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 HOST = "127.0.0.1"
 PORT = 8377
 HOME = os.path.expanduser("~")
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 INDEX = os.path.join(BASE_DIR, "index.html")
+SCRIPT = os.path.join(BASE_DIR, "docsearch.js")
 
 INCLUDE = re.compile(r"/docs/")
 EXCLUDE = re.compile(r"node_modules|/Library/|/\.git/|/\.cache/|/\.npm/|/\.Trash/|site-packages")
@@ -42,7 +43,9 @@ def run_mdfind(query):
             mtime = os.stat(path).st_mtime
         except OSError:
             continue
-        results.append({"path": path, "mtime": int(mtime)})
+        # `rel` lets the page label folder groups home-relative
+        # (~/projects/foo/docs) instead of printing an absolute machine path.
+        results.append({"path": path, "rel": os.path.relpath(path, HOME), "mtime": int(mtime)})
     results.sort(key=lambda r: r["mtime"], reverse=True)
     return results
 
@@ -90,8 +93,37 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, json.dumps(results), "application/json; charset=utf-8")
 
-        elif url.path == "/view":
+        elif url.path == "/open":
+            # Opens the doc via macOS `open` so the browser lands on the plain
+            # file:// URL — file:// links straight from this http page would be
+            # blocked by the browser. Same guard set as /view.
             p = params.get("p", [""])[0]
+            if not p or not view_allowed(p):
+                self._send(403, "forbidden")
+                return
+            try:
+                subprocess.run(["open", os.path.realpath(p)], timeout=10, check=True)
+            except (subprocess.SubprocessError, OSError):
+                self._send(500, "open failed")
+                return
+            self._send(200, "ok")
+
+        elif url.path == "/docsearch.js":
+            try:
+                with open(SCRIPT, "rb") as f:
+                    self._send(200, f.read(), "application/javascript; charset=utf-8")
+            except OSError:
+                self._send(500, "docsearch.js missing next to server script")
+
+        elif url.path == "/view" or url.path.startswith("/view/"):
+            # Two forms. Path form (/view/Users/me/docs/x.html) is what the list
+            # links to: a relative href inside the doc then resolves against the
+            # doc's own directory instead of the server root. Query form
+            # (/view?p=...) is kept for anything already pointing at it.
+            if url.path.startswith("/view/"):
+                p = unquote(url.path[len("/view"):])
+            else:
+                p = params.get("p", [""])[0]
             if not p or not view_allowed(p):
                 self._send(403, "forbidden")
                 return

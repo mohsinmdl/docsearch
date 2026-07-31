@@ -89,8 +89,8 @@
   </tr>
   <tr>
     <td><b>Opening results</b></td>
-    <td>Server <b>serves the doc</b> at <code>/view?p=&lt;path&gt;</code> with path guards (below).</td>
-    <td><code>file://</code> hrefs are blocked from http pages; serving is the standard clean workaround and keeps docs rendering with one click.</td>
+    <td>Server <b>serves the doc</b> at <code>/view?p=&lt;path&gt;</code> with path guards (below). <b>Amended 2026-07-07 (see <a href="#item-6">item 6</a>):</b> clicking a result now calls <code>/open?p=&lt;path&gt;</code> &mdash; the server runs macOS <code>open</code> on the guard-checked path, so the doc opens at its plain <code>file:///&hellip;</code> URL. <code>/view</code> kept for old bookmarks.</td>
+    <td><code>file://</code> hrefs are blocked from http pages; serving is the standard clean workaround and keeps docs rendering with one click. <b>2026-07-07:</b> wanted the real file path in the address bar instead of <code>localhost:8377/view?p=%2FUsers%2F&hellip;</code> &mdash; only a local process can open <code>file://</code>, so the server does it.</td>
   </tr>
 </table>
 
@@ -102,6 +102,7 @@
   <tr><td>3</td><td><a href="#item-3">LaunchAgent <code>com.mohsin.docsearch</code></a></td><td>launchd</td><td><span class="status risk-low">LOW</span></td><td><span class="status done">DONE</span></td><td>Running (survived <code>kickstart -k</code>); logs to <code>~/Library/Logs</code>.</td></tr>
   <tr><td>4</td><td><a href="#item-4"><code>docweb</code> alias</a></td><td>zsh</td><td><span class="status risk-low">LOW</span></td><td><span class="status done">DONE</span></td><td>One-word way to open the page from the terminal.</td></tr>
   <tr><td>5</td><td><a href="#item-5">Docs + memory updates</a></td><td>docs</td><td><span class="status risk-low">LOW</span></td><td><span class="status done">DONE</span></td><td>Cross-linked from doc-search-setup.html; memory updated.</td></tr>
+  <tr><td>6</td><td><a href="#item-6">Open results as plain <code>file://</code> URLs (<code>/open</code>)</a></td><td><span class="status portable">STDLIB</span></td><td><span class="status risk-low">LOW</span></td><td><span class="status done">DONE</span></td><td>Click &rarr; server runs <code>open</code> &rarr; browser shows <code>file:///Users/&hellip;</code>.</td></tr>
 </table>
 
 <hr>
@@ -116,7 +117,8 @@
 <ul>
   <li><code>GET /</code> &mdash; embedded single-page UI: autofocus search bar, result rows (title-ish filename, full path, modified date), styled like these runbooks. On load with an empty query it lists <b>all</b> runbooks newest-first.</li>
   <li><code>GET /search?q=&lt;words&gt;</code> &mdash; runs <code>mdfind -onlyin $HOME "kind:html &lt;q&gt;"</code> (or the all-HTML content-type query when <code>q</code> is empty), applies the <b>same</b> <code>/docs/</code> include + exclude pattern as the zsh function, sorts by mtime desc, returns JSON <code>[{path, mtime}]</code>. The query string is passed to <code>mdfind</code> as a single argv element (no shell interpolation).</li>
-  <li><code>GET /view?p=&lt;path&gt;</code> &mdash; serves the matched doc so results open with one click (see item 2 for guards).</li>
+  <li><code>GET /view?p=&lt;path&gt;</code> &mdash; serves the matched doc so results open with one click (see item 2 for guards). Since 2026-07-07 no longer what clicks use (kept for old bookmarks) &mdash; see next route.</li>
+  <li><code>GET /open?p=&lt;path&gt;</code> <i>(added 2026-07-07)</i> &mdash; same guards as <code>/view</code>, then runs macOS <code>open</code> on the path so the doc opens in the default browser at its plain <code>file:///&hellip;</code> URL (see <a href="#item-6">item 6</a>).</li>
 </ul>
 <p><b>Debounced live search</b> (~250&nbsp;ms) in the page JS, so results update as you type without hammering <code>mdfind</code>.</p>
 </details>
@@ -178,6 +180,21 @@ ps -o rss,%cpu,etime -p $(launchctl list | awk '/docsearch/{print $1}')</pre>
 </details>
 </div>
 
+<div class="item-card ok" id="item-6">
+<h3>6. Open results as plain <code>file://</code> URLs <span class="status portable">STDLIB</span> <span class="status done">DONE &mdash; built &amp; verified 2026-07-07</span></h3>
+<details open>
+<summary><b>Brief</b></summary>
+<p><b>Request (2026-07-07):</b> clicking a result should land on <code>file:///Users/dev/&hellip;.html</code>, not <code>http://localhost:8377/view?p=%2FUsers%2F&hellip;</code>.</p>
+<p><b>Constraint (same one from the Headline verdict):</b> browsers still block <code>file://</code> navigation from an http page, so the page itself cannot open that URL. Instead the <i>server</i> opens it:</p>
+<ul>
+  <li><b>Server:</b> new <code>GET /open?p=&lt;path&gt;</code> route &mdash; runs the <b>same <code>view_allowed()</code> guards</b> as <code>/view</code> (realpath under <code>$HOME</code>, <code>.html</code>, <code>/docs/</code>, exclude pattern; 403 otherwise), then <code>subprocess.run(["open", realpath])</code>. macOS opens the doc in the default browser at its <code>file://</code> URL.</li>
+  <li><b>Page:</b> <code>openDoc()</code> switches from <code>window.open('/view?p=&hellip;')</code> to <code>fetch('/open?p=&hellip;')</code>.</li>
+  <li><b><code>/view</code> stays</b> (unchanged, still guarded) so previously bookmarked <code>/view</code> URLs keep working.</li>
+</ul>
+<p><b>Trade-offs:</b> docs now open in the <i>default</i> browser (may differ from where the search page is); the new tab comes from macOS, not the page, so no popup-blocker involvement. <b>Bonus fix:</b> relative cross-links between runbooks (e.g. <code>doc-search-setup.html</code>) 404&rsquo;d under <code>/view</code> but resolve correctly under <code>file://</code>.</p>
+</details>
+</div>
+
 <div class="item-card ok" id="item-5">
 <h3>5. Docs + memory updates <span class="status risk-low">LOW</span> <span class="status done">DONE 2026-07-05</span></h3>
 <details open>
@@ -217,6 +234,14 @@ ps -o rss,%cpu,etime -p $(launchctl list | awk '/docsearch/{print $1}')</pre>
   <tr><td>Guards hold</td><td><code>curl -i 'localhost:8377/view?p=/etc/hosts'</code> (and a <code>../</code> attempt)</td><td><b>403</b> both</td><td><span class="status done">PASS</span></td></tr>
   <tr><td>Localhost only</td><td><code>lsof -nP -i :8377</code></td><td>Bound to <code>127.0.0.1</code>, not <code>*</code></td><td><span class="status done">PASS</span></td></tr>
   <tr><td>Survives restart</td><td><code>launchctl kickstart -k gui/$UID/com.mohsin.docsearch</code></td><td>Back within seconds</td><td><span class="status done">PASS</span></td></tr>
+</table>
+
+<h2>Verification &mdash; <code>/open</code> amendment (2026-07-07)</h2>
+<table>
+  <tr><th>Check</th><th>Command</th><th>Expected</th><th style="width:90px">Result</th></tr>
+  <tr><td>Open works</td><td><code>curl 'localhost:8377/open?p=/Users/dev/projects/docsearch/docs/doc-web-search.html'</code></td><td><code>200 ok</code> + doc opens in browser at <code>file:///&hellip;</code></td><td><span class="status done">PASS</span></td></tr>
+  <tr><td>Guards hold on /open</td><td><code>curl -i 'localhost:8377/open?p=/etc/hosts'</code> (and a <code>../</code> attempt)</td><td><b>403</b> both, nothing opens</td><td><span class="status done">PASS</span></td></tr>
+  <tr><td>/view still works</td><td><code>curl 'localhost:8377/view?p=/Users/dev/docs/claude-swap-setup.html'</code></td><td>HTML of the runbook</td><td><span class="status done">PASS</span></td></tr>
 </table>
 
 <h2>Rollback</h2>
