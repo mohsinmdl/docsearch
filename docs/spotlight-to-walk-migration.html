@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>docsearch &mdash; Spotlight &rarr; Filesystem Walk Migration Runbook</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 20px; color: #222; line-height: 1.45; }
+  h1 { border-bottom: 2px solid #333; padding-bottom: 6px; }
+  h2 { border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 32px; }
+  .meta { background: #f4f4f4; border: 1px solid #ddd; padding: 10px 14px; border-radius: 4px; margin: 12px 0; font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 14px; }
+  th, td { border: 1px solid #bbb; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  .status { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; letter-spacing: 0.5px; white-space: nowrap; }
+  .done         { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+  .blocked      { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+  .awaiting     { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+  .portable     { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; font-weight: bold; }
+  details { margin: 4px 0; }
+  details summary { cursor: pointer; padding: 2px 0; }
+  code, pre { background: #f6f6f6; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+  pre { padding: 8px 12px; overflow-x: auto; }
+  .item-card { border: 1px solid #ddd; border-radius: 4px; padding: 12px; margin: 10px 0; background: #fafafa; }
+  .item-card.high { border-left: 4px solid #d9534f; }
+  .item-card.ok { border-left: 4px solid #5cb85c; }
+  .small { font-size: 12px; color: #666; }
+  dt { font-weight: bold; margin-top: 8px; }
+  dd { margin: 2px 0 0 24px; }
+</style>
+</head>
+<body>
+
+<h1>docsearch &mdash; Spotlight &rarr; Filesystem Walk Migration</h1>
+
+<div class="meta">
+  <b>Related:</b> <a href="doc-web-search.html">doc-web-search.html</a> (the original design &amp; as-built record for this tool) &middot;
+  <a href="doc-search-setup.html">doc-search-setup.html</a> (the terminal <code>docsearch</code> function; lives in <code>~/docs/</code>)<br>
+  <b>Context:</b> On 2026-07-31 a freshly written runbook
+  (<code>mobile-app-upstream-upgrade-runbook.html</code>) was missing from the docsearch page.
+  The file was fine; the Mac&rsquo;s Spotlight index had gone read-only and had stopped
+  accepting new files entirely.<br>
+  <b>Purpose:</b> Record why the Spotlight dependency was removed, what replaced it, and how to
+  roll it back.<br>
+  <b>Scope:</b> <code>docsearch-server.py</code> (search engine), <code>~/.zshrc</code>
+  (<code>docsearch()</code> now queries the server), new <code>test/test_server.py</code>,
+  doc updates. No change to the page, the model layer, the LaunchAgent, or the JSON contract.<br>
+  <b>Created:</b> 2026-07-31 &middot;
+  <span class="status done">SHIPPED &amp; VERIFIED 2026-07-31</span>
+  <span class="status portable">STDLIB</span>
+</div>
+
+<h2>Symptom &amp; diagnosis</h2>
+
+<p>A runbook that plainly existed on disk did not appear in the docsearch listing. The
+diagnosis ruled the tool out first, then the index:</p>
+
+<table>
+  <tr><th>Probe</th><th>Result</th><th>Reading</th></tr>
+  <tr>
+    <td><code>curl -o /dev/null -w "%{http_code}" .../view/&lt;abs path&gt;</code></td>
+    <td><b>200</b></td>
+    <td>The server can read the file and it passes every include/exclude rule. Not a filter problem.</td>
+  </tr>
+  <tr>
+    <td><code>mdls &lt;file&gt;</code></td>
+    <td>every attribute <code>(null)</code></td>
+    <td>The file is not in the Spotlight index at all.</td>
+  </tr>
+  <tr>
+    <td><code>mdimport &lt;file&gt;</code></td>
+    <td>no effect, still <code>(null)</code></td>
+    <td>Re-importing is a no-op &mdash; the index refuses writes.</td>
+  </tr>
+  <tr>
+    <td><code>mdutil -s /System/Volumes/Data</code></td>
+    <td><b>&ldquo;Index is read-only.&rdquo;</b></td>
+    <td>Root cause. Nothing new gets indexed, system-wide.</td>
+  </tr>
+  <tr>
+    <td>Write a throwaway <code>.html</code> into <code>~/docs</code>, wait, <code>mdfind</code> it</td>
+    <td>never appears</td>
+    <td>Confirms it is not specific to one file or one folder.</td>
+  </tr>
+</table>
+
+<div class="item-card high">
+  <b>Why this mattered more than one missing file.</b> <code>/search</code> was 100%
+  <code>mdfind</code>-backed, so docsearch&rsquo;s completeness was exactly Spotlight&rsquo;s
+  health &mdash; and the failure mode is silent. Runbooks stop showing up and nothing reports an
+  error. Two files in one folder were already affected
+  (<code>mobile-app-upstream-upgrade-runbook.html</code>,
+  <code>mobile-app-nested-lists-runbook.html</code>) before anyone noticed.
+</div>
+
+<h2>Decision</h2>
+
+<table>
+  <tr><th>Option</th><th>Verdict</th><th>Why</th></tr>
+  <tr>
+    <td>Rebuild the Spotlight index (<code>sudo mdutil -E -i on /System/Volumes/Data</code>)</td>
+    <td><span class="status awaiting">USER&rsquo;S CALL, SEPARATE</span></td>
+    <td>Fixes the Mac (Spotlight search, Finder, Smart Folders) but leaves docsearch hostage to
+      the next index wedge. Needs <code>sudo</code> and hours of background reindexing. Still
+      worth doing for everything <em>else</em> on the machine.</td>
+  </tr>
+  <tr>
+    <td><b>Walk the filesystem in the server</b></td>
+    <td><span class="status done">CHOSEN</span></td>
+    <td>The corpus is ~71 files in a handful of predictable folders. Owning the index makes the
+      tool immune to Spotlight&rsquo;s state, and it retires the duplicated include/exclude rules
+      between the server and <code>~/.zshrc</code>. Cost: ~1.8&nbsp;s per rescan, off the request path.</td>
+  </tr>
+</table>
+
+<h2>Engine design</h2>
+
+<table>
+  <tr><th>Piece</th><th>Behaviour</th></tr>
+  <tr>
+    <td><b>Scan</b></td>
+    <td><code>os.walk($HOME)</code>, collecting <code>.html</code> files whose path contains
+      <code>/docs/</code> and misses the exclude pattern. Only <code>.html</code>:
+      <code>view_allowed()</code> rejects anything else, so a <code>.htm</code> hit would 403 when
+      clicked.</td>
+  </tr>
+  <tr>
+    <td><b>Prune</b></td>
+    <td>Never descends into <code>node_modules</code>, <code>Library</code>,
+      <code>site-packages</code>, <code>venv</code>, <code>__pycache__</code>, or
+      <b>any directory whose name starts with a dot</b>. The include/exclude regexes are still
+      applied per path afterwards &mdash; they remain the authoritative guard, shared with
+      <code>/view</code> and <code>/open</code>.</td>
+  </tr>
+  <tr>
+    <td><b>Cache</b></td>
+    <td>Corpus held in memory, TTL 45&nbsp;s, stale-while-revalidate: a stale corpus is served
+      immediately and the rescan runs on a worker thread, so <b>no request ever waits on the
+      walk</b>. Only a cold start scans inline, and startup does that before the socket opens.
+      Rescans are request-triggered, not on a timer, which preserves the tool&rsquo;s 0% idle CPU.</td>
+  </tr>
+  <tr>
+    <td><b>Matching</b></td>
+    <td>Every query word must appear, case-insensitively, as a <b>substring</b> of the
+      home-relative path or the body text. Substring rather than whole-word because half these
+      runbooks are named for build tags like <code>cc18</code>. Matching <code>rel</code> rather
+      than the absolute path keeps &ldquo;Users&rdquo; and the username from matching everything.
+      Filename-fragment queries are answered from the path alone, without opening any file.</td>
+  </tr>
+  <tr>
+    <td><b>Text extraction</b></td>
+    <td><code>&lt;script&gt;</code> and <code>&lt;style&gt;</code> blocks are dropped
+      <em>whole</em>, then tags become spaces, then entities are unescaped. Dropping the style
+      blocks is essential: these runbooks embed their CSS, so otherwise
+      &ldquo;grid&rdquo; or &ldquo;flex&rdquo; would match every document. Per-file cache keyed on
+      <code>(mtime, size)</code>.</td>
+  </tr>
+  <tr>
+    <td><b>Diagnostics</b></td>
+    <td><code>/search</code> answers carry <code>X-Docsearch-Engine: walk</code> and
+      <code>X-Docsearch-Last-Scan</code>. Each scan logs its doc count and <b>names</b> any folder
+      it could not read &mdash; which is how a TCC block stops being invisible.</td>
+  </tr>
+</table>
+
+<h3>Why hidden directories are pruned</h3>
+<p>This is parity, not a shortcut. Spotlight never indexed dot-directories, so
+<code>mdfind</code> never returned anything from them. A walk that descends into them finds
+<b>51 extra files &mdash; all stale duplicate copies</b> of real runbooks sitting in
+<code>.claude-b/jobs/*/tmp/</code>, <code>.claude/worktrees/</code> and
+<code>.git-worktrees/</code>. Without dot-pruning the dashboard would have suddenly filled with
+duplicates of documents already listed.</p>
+
+<h2>Measured</h2>
+
+<table>
+  <tr><th>Metric</th><th>Value</th><th>Note</th></tr>
+  <tr><td>Walk, prune list only (no dot-pruning)</td><td>118,098 dirs / <b>10.4&nbsp;s</b></td>
+      <td>Unusable. Dominated by hidden dirs &mdash; <code>.gradle</code> alone is 50,883 dirs.</td></tr>
+  <tr><td>Walk, with dot-pruning</td><td>17,393 dirs / <b>1.8&nbsp;s</b></td><td>Shipped configuration.</td></tr>
+  <tr><td>Corpus size</td><td><b>71 docs</b></td><td>58 under <code>~/projects</code>, 13 under <code>~/docs</code>.</td></tr>
+  <tr><td>Request latency, warm</td><td>&lt; 0.01&nbsp;s</td><td>Served from memory.</td></tr>
+  <tr><td>Request latency, corpus stale</td><td>0.02&nbsp;s</td><td>Stale-while-revalidate: the 1.8&nbsp;s walk happens on a worker.</td></tr>
+</table>
+
+<h2>Verification (all passed 2026-07-31)</h2>
+
+<div class="item-card ok">
+<ol>
+  <li><code>python3 -m unittest discover -s test</code> &mdash; <b>25 passed</b> (new).</li>
+  <li><code>node --test test/docsearch.test.js</code> &mdash; <b>19 passed</b> (model layer, unchanged).
+    <span class="small">Note: <code>node --test test/</code> fails on Node 22; pass the file.</span></li>
+  <li><b>The trigger case:</b> <code>/search?q=mobile-app-upstream</code> returns
+    <code>mobile-app-upstream-upgrade-runbook.html</code> &mdash; the file that was invisible.
+    Same for <code>mobile-app-nested</code>.</li>
+  <li>Empty query returns 71 docs with <b>zero</b> paths containing <code>worktree</code>,
+    <code>.claude</code> or <code>jobs</code>.</li>
+  <li>Style-strip proof: <code>q=flex</code> matches 2 of 71 and <code>q=grid</code> matches 1 of
+    71 (prose mentions), not all 71.</li>
+  <li>Body-text search: <code>q=DeviceTokenNotForTopic</code> &mdash; a string in no filename
+    &mdash; returns 4 documents.</li>
+  <li><code>/view</code> still returns 200 for a corpus file; headers show
+    <code>X-Docsearch-Engine: walk</code> and an advancing <code>X-Docsearch-Last-Scan</code>.</li>
+  <li>Shell: <code>docsearch mobile-app-upstream</code> lists the runbook with its date; against a
+    dead port the function prints the kickstart hint and exits 2 instead of &ldquo;no matches&rdquo;.</li>
+</ol>
+</div>
+
+<h2>Rollback</h2>
+<pre>cd ~/projects/docsearch
+git log --oneline -3                 # find the walk-engine commit
+git revert &lt;commit&gt;                  # server + tests + docs
+launchctl kickstart -k gui/$(id -u)/com.mohsin.docsearch</pre>
+<p>The <code>~/.zshrc</code> function is not under git &mdash; its previous body (the
+<code>mdfind | grep | stat | sort</code> pipeline) is quoted in the commit message and in this
+runbook&rsquo;s history section. Reverting only makes sense alongside a working Spotlight index; the
+pre-migration behaviour is precisely what was broken.</p>
+
+<h2>Known limitations</h2>
+<ul>
+  <li><b>TCC-protected folders stay invisible.</b> The scan log now names them:
+    <code>scan: 71 docs, unreadable: Desktop, Documents, Downloads, Movies, Music, Pictures</code>.
+    Anything under <code>~/Documents</code> (e.g. Codex runbooks) will not be listed until the
+    daemon&rsquo;s interpreter is granted Full Disk Access. Note the LaunchAgent runs
+    <code>/usr/bin/python3</code>, which is a shim that re-executes the Python inside the active
+    developer directory &mdash; so the process you see in <code>ps</code> is Xcode&rsquo;s Python.
+    That mismatch is why an earlier Full Disk Access grant appeared to do nothing. Protection
+    follows a file&rsquo;s <em>real</em> location, so symlinking out of <code>~/Documents</code>
+    does not help. The permission-free workaround remains: keep runbooks under
+    <code>~/docs/</code> or <code>~/projects/**/docs/</code>.</li>
+  <li><b>Symlinked docs trees are not followed</b> (<code>followlinks=False</code>) &mdash; same
+    practical behaviour as before.</li>
+  <li><b>No phrase queries.</b> Spotlight&rsquo;s <code>"exact phrase"</code> quoting and its
+    <code>kind:</code>/<code>date:</code> operators are gone. Word-AND substring is otherwise a
+    superset of what Spotlight matched.</li>
+  <li><b>Up to 45&nbsp;s of staleness.</b> A runbook written seconds ago may need one refresh to
+    appear. Previously this was unbounded, because the index never updated at all.</li>
+  <li><b>The Mac&rsquo;s Spotlight index is still read-only.</b> This change routes docsearch
+    around it; it does not repair it. Finder search, Smart Folders and <code>mdfind</code>
+    elsewhere remain affected until the index is rebuilt.</li>
+</ul>
+
+<h2>Glossary</h2>
+<dl>
+  <dt>docsearch</dt>
+  <dd>This tool: a small always-on local web page at <code>http://localhost:8377</code> that lists
+    and searches the HTML runbooks scattered across the home folder, plus a shell function of the
+    same name that does the search from a terminal.</dd>
+
+  <dt>Spotlight</dt>
+  <dd>macOS&rsquo;s built-in system-wide search index. It watches the disk and maintains a
+    database of file names, metadata and text content so searches return instantly.</dd>
+
+  <dt>mdfind</dt>
+  <dd>The command-line interface to Spotlight. It queries the index only &mdash; it never reads
+    the filesystem &mdash; which is why a broken index makes it return nothing for files that
+    plainly exist.</dd>
+
+  <dt>mdutil / mdimport / mdls</dt>
+  <dd>The rest of the Spotlight command family: <code>mdutil</code> reports and controls indexing
+    per volume, <code>mdimport</code> asks for a specific file to be re-indexed, <code>mdls</code>
+    prints the indexed metadata for a file (all-null output means &ldquo;not indexed&rdquo;).</dd>
+
+  <dt>TCC &mdash; Transparency, Consent and Control</dt>
+  <dd>The macOS privacy subsystem that gates access to protected folders such as
+    <code>~/Documents</code>, <code>~/Desktop</code> and <code>~/Downloads</code>. A background
+    process without permission gets errors rather than contents.</dd>
+
+  <dt>Full Disk Access &mdash; FDA</dt>
+  <dd>The System Settings permission (Privacy &amp; Security) that exempts a named program from
+    those TCC restrictions.</dd>
+
+  <dt>launchd / LaunchAgent</dt>
+  <dd>macOS&rsquo;s service manager, and the per-user job description file it reads. The
+    LaunchAgent <code>com.mohsin.docsearch</code> is what starts this server at login and restarts
+    it if it exits.</dd>
+
+  <dt>launchctl kickstart</dt>
+  <dd>The command that restarts a launchd job. Required after editing the server&rsquo;s Python;
+    <code>index.html</code> and <code>docsearch.js</code> are re-read from disk per request and
+    need only a browser reload.</dd>
+
+  <dt>TTL &mdash; time to live</dt>
+  <dd>How long a cached result is treated as current before it is refreshed. Here: 45 seconds for
+    the file list.</dd>
+
+  <dt>Stale-while-revalidate</dt>
+  <dd>A caching strategy where an expired result is still served immediately while a fresh one is
+    computed in the background &mdash; so the refresh cost never lands on a user&rsquo;s request.</dd>
+
+  <dt>mtime</dt>
+  <dd>A file&rsquo;s last-modification time, as recorded by the filesystem. docsearch sorts by it
+    so the newest runbooks are listed first.</dd>
+
+  <dt>Corpus</dt>
+  <dd>The full set of documents the tool considers searchable &mdash; here, the 71 HTML files the
+    walk collects.</dd>
+
+  <dt>Prune (in a directory walk)</dt>
+  <dd>Removing a directory from the list of places to descend into, so its entire subtree is
+    skipped rather than examined and discarded.</dd>
+
+  <dt>git worktree</dt>
+  <dd>A second working directory checked out from the same git repository. Because it contains a
+    full copy of the tracked files, it is a source of duplicate runbooks &mdash; hence the pruning.</dd>
+</dl>
+
+<p class="small">Server: <code>~/projects/docsearch/docsearch-server.py</code> &middot;
+LaunchAgent: <code>com.mohsin.docsearch</code> &middot; Page: <code>http://localhost:8377</code></p>
+
+</body>
+</html>

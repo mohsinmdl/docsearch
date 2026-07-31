@@ -40,7 +40,8 @@
 <div class="meta">
   <b>Related:</b> <a href="doc-search-setup.html">doc-search-setup.html</a> (the terminal <code>docsearch</code> + Smart Folder this builds on) &middot;
   <a href="claude-swap-setup.html">claude-swap-setup.html</a> (style/workflow sibling)<br>
-  <b>Context:</b> <code>docsearch</code> (zsh) finds HTML runbooks via Spotlight (<code>mdfind "kind:html &hellip;"</code>) restricted to paths containing <code>/docs/</code>. Requested 2026-07-05: the <b>same search from a web browser</b> &mdash; a page with a search bar.<br>
+  <b>Context:</b> <code>docsearch</code> (zsh) finds HTML runbooks restricted to paths containing <code>/docs/</code>. Requested 2026-07-05: the <b>same search from a web browser</b> &mdash; a page with a search bar.<br>
+  <b>Superseded in part:</b> the search engine described here was Spotlight/<code>mdfind</code>. It was replaced by a filesystem walk on 2026-07-31 &mdash; see <a href="spotlight-to-walk-migration.html">spotlight-to-walk-migration.html</a>. Everything about the server shape, guards, LaunchAgent and page still holds.<br>
   <b>Purpose:</b> Design + execution runbook for a tiny always-on localhost web UI that runs the identical query. Served as the review artifact pre-build; now the as-built record.<br>
   <b>Scope:</b> One Python-stdlib server file, one LaunchAgent, one zsh alias, doc/memory updates. No new packages, no cloud, nothing listening beyond 127.0.0.1.<br>
   <b>Project folder (added at build):</b> <code>~/projects/docsearch/</code> &mdash; <code>docsearch-server.py</code>, <code>index.html</code> (vanilla translation of the Claude Design mock), <code>com.mohsin.docsearch.plist</code> (installed copy in <code>~/Library/LaunchAgents/</code>), plus the raw Claude Design export + extracted markup for reference.<br>
@@ -57,7 +58,7 @@
 </p>
 
 <h2>Headline verdict</h2>
-<p><b>Trivially feasible, one structural fact drives the whole design:</b> a browser page cannot execute shell commands, so &ldquo;a search bar that runs docsearch&rdquo; requires a <b>local server process</b> that runs <code>mdfind</code> on the page&rsquo;s behalf. Everything else follows from keeping that server as small and safe as possible:</p>
+<p><b>Trivially feasible, one structural fact drives the whole design:</b> a browser page cannot read the filesystem, so &ldquo;a search bar that runs docsearch&rdquo; requires a <b>local server process</b> that does the searching on the page&rsquo;s behalf. Everything else follows from keeping that server as small and safe as possible:</p>
 <ol>
   <li><b>Single file, Python 3 stdlib only</b> (<code>/usr/bin/python3</code> 3.9.6, verified present) &mdash; no pip, no node, nothing to update. ~120 lines.</li>
   <li><b>Bound to 127.0.0.1 only</b> &mdash; unreachable from the network by construction. Port <b>8377</b> verified free.</li>
@@ -74,7 +75,7 @@
   </tr>
   <tr>
     <td><b>Query semantics</b></td>
-    <td><b>Identical to <code>docsearch</code></b>: <code>mdfind -onlyin ~ "kind:html &lt;q&gt;"</code> &rarr; keep <code>/docs/</code> paths &rarr; same exclude pattern &rarr; newest first. Empty query lists <i>all</i> runbooks.</td>
+    <td><b>Identical to <code>docsearch</code></b> &mdash; and since 2026-07-31 literally so: the zsh function now calls this server instead of running its own copy of the pipeline. Keep <code>/docs/</code> paths &rarr; same exclude pattern &rarr; newest first. Empty query lists <i>all</i> runbooks.</td>
     <td>One mental model in both places; the empty-query listing makes the page double as a &ldquo;recent runbooks&rdquo; dashboard.</td>
   </tr>
   <tr>
@@ -116,11 +117,11 @@
 <p><b>File:</b> <code>~/projects/docsearch/docsearch-server.py</code> (location moved from <code>~/docs</code> to a project folder at build time, 2026-07-05) &mdash; <code>ThreadingHTTPServer(("127.0.0.1", 8377), &hellip;)</code>. The page lives separately at <code>~/projects/docsearch/index.html</code> and is read per-request, so design tweaks don&rsquo;t need a server restart. Three routes:</p>
 <ul>
   <li><code>GET /</code> &mdash; embedded single-page UI: autofocus search bar, result rows (title-ish filename, full path, modified date), styled like these runbooks. On load with an empty query it lists <b>all</b> runbooks newest-first.</li>
-  <li><code>GET /search?q=&lt;words&gt;</code> &mdash; runs <code>mdfind -onlyin $HOME "kind:html &lt;q&gt;"</code> (or the all-HTML content-type query when <code>q</code> is empty), applies the <b>same</b> <code>/docs/</code> include + exclude pattern as the zsh function, sorts by mtime desc, returns JSON <code>[{path, mtime}]</code>. The query string is passed to <code>mdfind</code> as a single argv element (no shell interpolation).</li>
+  <li><code>GET /search?q=&lt;words&gt;</code> &mdash; matches every query word, case-insensitively, as a substring of each doc&rsquo;s home-relative path or stripped body text (empty <code>q</code> = the whole corpus), sorts by mtime desc, returns JSON <code>[{path, rel, mtime}]</code>. Answers carry <code>X-Docsearch-Engine</code> and <code>X-Docsearch-Last-Scan</code> headers. <span class="small">Changed 2026-07-31: this ran <code>mdfind</code> until Spotlight&rsquo;s index went read-only &mdash; see <a href="spotlight-to-walk-migration.html">spotlight-to-walk-migration.html</a>.</span></li>
   <li><code>GET /view?p=&lt;path&gt;</code> &mdash; serves the matched doc so results open with one click (see item 2 for guards). Since 2026-07-07 no longer what clicks use (kept for old bookmarks) &mdash; see next route.</li>
   <li><code>GET /open?p=&lt;path&gt;</code> <i>(added 2026-07-07)</i> &mdash; same guards as <code>/view</code>, then runs macOS <code>open</code> on the path so the doc opens in the default browser at its plain <code>file:///&hellip;</code> URL (see <a href="#item-6">item 6</a>).</li>
 </ul>
-<p><b>Debounced live search</b> (~250&nbsp;ms) in the page JS, so results update as you type without hammering <code>mdfind</code>.</p>
+<p><b>Debounced live search</b> (~250&nbsp;ms) in the page JS, so results update as you type without re-running the match over the corpus on every keystroke.</p>
 </details>
 </div>
 
@@ -164,7 +165,7 @@
 <table>
   <tr><th style="width:180px">Metric</th><th style="width:140px">Value</th><th>Meaning</th></tr>
   <tr><td>RSS / physical footprint</td><td><b>~11&ndash;12&nbsp;MB</b></td><td>Actual RAM held (<code>ps</code> RSS 11,600&nbsp;KB; <code>footprint</code> 12&nbsp;MB) &mdash; ~0.1% of system memory, under the ~15&nbsp;MB estimate in the Decisions table. Scale: a single Chrome tab is typically 10&ndash;30&times; more.</td></tr>
-  <tr><td>CPU</td><td><b>0.0%</b></td><td>Fully idle between requests (blocked on the socket); only works for the ~1&nbsp;s an <code>mdfind</code> query takes per search.</td></tr>
+  <tr><td>CPU</td><td><b>0.0%</b></td><td>Fully idle between requests (blocked on the socket). Since the 2026-07-31 engine swap it also spends ~1.8&nbsp;s on a background worker whenever a search arrives more than 45&nbsp;s after the last filesystem scan &mdash; still zero when the page isn&rsquo;t being used, since rescans are request-triggered rather than on a timer.</td></tr>
   <tr><td>VSZ</td><td>~415&nbsp;GB (ignore)</td><td>Reserved virtual <i>address space</i> (shared caches/mappings), normal on macOS and not memory used &mdash; RSS/footprint are the honest numbers.</td></tr>
 </table>
 <pre># check any time:
@@ -210,8 +211,8 @@ ps -o rss,%cpu,etime -p $(launchctl list | awk '/docsearch/{print $1}')</pre>
   <li><b>A permanently running background process.</b> Until now the search stack was zero-resident (Spotlight was already running anyway). This adds one python process (measured 2026-07-05: ~11&ndash;12&nbsp;MB RSS, 0.0% CPU idle) that exists whether or not you use the page. On-demand mode was declined, but the rollback is one <code>launchctl bootout</code>.</li>
   <li><b>KeepAlive can loop.</b> If the script is ever edited into a syntax error, launchd will respawn it repeatedly (throttled to ~10&nbsp;s). The log file makes this obvious, but it&rsquo;s a failure mode the pure-zsh setup didn&rsquo;t have.</li>
   <li><b>A claimed port.</b> 8377 is now spoken for on this machine; anything else wanting it will fail confusingly until you remember this server.</li>
-  <li><b>Two implementations of one query.</b> The include/exclude patterns now live in <code>~/.zshrc</code> <i>and</i> the server. If you tweak one, tweak the other &mdash; noted in both files. (Deliberate trade: importing zsh from python or vice-versa would be far uglier than 4 duplicated regex lines.)</li>
-  <li><b>Same Spotlight dependency.</b> Anything Spotlight can&rsquo;t see (Privacy-listed folders, seconds-old files) is invisible here too &mdash; the web UI doesn&rsquo;t fix that, it inherits it.</li>
+  <li><s><b>Two implementations of one query.</b> The include/exclude patterns now live in <code>~/.zshrc</code> <i>and</i> the server. If you tweak one, tweak the other &mdash; noted in both files.</s> <b>Resolved 2026-07-31:</b> the zsh function now calls <code>/search</code>, so the server is the only implementation.</li>
+  <li><s><b>Same Spotlight dependency.</b> Anything Spotlight can&rsquo;t see (Privacy-listed folders, seconds-old files) is invisible here too &mdash; the web UI doesn&rsquo;t fix that, it inherits it.</s> <b>Removed 2026-07-31</b> &mdash; and it bit first: the index went read-only and new runbooks silently stopped appearing. The server now walks the filesystem itself. What replaces it is smaller: up to 45&nbsp;s of staleness, and folders macOS blocks the daemon from reading (<code>~/Documents</code>, <code>~/Desktop</code>, <code>~/Downloads</code>) are now <i>named in the log</i> instead of silently empty. See <a href="spotlight-to-walk-migration.html">spotlight-to-walk-migration.html</a>.</li>
 </ol>
 
 <h2>Recommended sequence (executed 2026-07-05)</h2>
