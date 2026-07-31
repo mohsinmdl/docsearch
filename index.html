@@ -824,7 +824,17 @@ try {
      head above the cursor. */
   function moveHead(dir) {
     var at = DS.nextHead(visible, sel, dir);
-    if (at < 0) return;
+    if (at < 0) {
+      /* Ungrouped, the list has no headings at all, so "next group" would be a
+         dead key — and it swallows the browser's own ⌘↓ as well. The only
+         boundaries left are the ends of the list, so jump there instead. With
+         grouping on, running out of headings genuinely means there is no next
+         group, and staying put is the honest answer. */
+      if (entries.length && DS.nextHead(visible, -1, 1) < 0) {
+        goToEntry(dir > 0 ? entries.length - 1 : 0);
+      }
+      return;
+    }
     sel = at;
     render();
     scrollSelIntoView();
