@@ -23,6 +23,7 @@ try {
     --sel-bg:#EDF3FC; --row-hover:#F4F4F5; --sel-hint:#5A78A8;
     --chip-green-bg:#DFF2E1; --chip-green-fg:#1E6B33;
     --chip-amber-bg:#FBF0DC; --chip-amber-fg:#7A4E12;
+    --chip-blue-bg:#E3ECFA; --chip-blue-fg:#2A5096; --chip-red-bg:#FBE3E1; --chip-red-fg:#9A2B22; --chip-gray-bg:#EEEEF0; --chip-gray-fg:#5A5A5E;
     --banner-bg:#FBF0DC; --banner-border:#EBD9B8; --banner-fg:#7A4E12; --banner-sub:#8A6A38; --banner-code-bg:rgba(122,78,18,0.08);
     --seg-track:#F0F0F2; --seg-sel-bg:#FFFFFF;
   }
@@ -34,6 +35,7 @@ try {
       --sel-bg:#2C3542; --row-hover:#28282C; --sel-hint:#8FAEDC;
       --chip-green-bg:rgba(48,209,88,0.16); --chip-green-fg:#8CD9A0;
       --chip-amber-bg:rgba(230,180,80,0.14); --chip-amber-fg:#D9BC85;
+      --chip-blue-bg:rgba(100,150,240,0.18); --chip-blue-fg:#9DB9EA; --chip-red-bg:rgba(240,90,80,0.16); --chip-red-fg:#EBA39C; --chip-gray-bg:rgba(255,255,255,0.08); --chip-gray-fg:#A0A0A6;
       --banner-bg:rgba(230,180,80,0.12); --banner-border:rgba(230,180,80,0.30); --banner-fg:#D9BC85; --banner-sub:#C0A878; --banner-code-bg:rgba(230,180,80,0.12);
       --seg-track:#2A2A2E; --seg-sel-bg:#3E3E44;
     }
@@ -45,6 +47,7 @@ try {
     --sel-bg:#EDF3FC; --row-hover:#F4F4F5; --sel-hint:#5A78A8;
     --chip-green-bg:#DFF2E1; --chip-green-fg:#1E6B33;
     --chip-amber-bg:#FBF0DC; --chip-amber-fg:#7A4E12;
+    --chip-blue-bg:#E3ECFA; --chip-blue-fg:#2A5096; --chip-red-bg:#FBE3E1; --chip-red-fg:#9A2B22; --chip-gray-bg:#EEEEF0; --chip-gray-fg:#5A5A5E;
     --banner-bg:#FBF0DC; --banner-border:#EBD9B8; --banner-fg:#7A4E12; --banner-sub:#8A6A38; --banner-code-bg:rgba(122,78,18,0.08);
     --seg-track:#F0F0F2; --seg-sel-bg:#FFFFFF;
   }
@@ -55,6 +58,7 @@ try {
     --sel-bg:#2C3542; --row-hover:#28282C; --sel-hint:#8FAEDC;
     --chip-green-bg:rgba(48,209,88,0.16); --chip-green-fg:#8CD9A0;
     --chip-amber-bg:rgba(230,180,80,0.14); --chip-amber-fg:#D9BC85;
+    --chip-blue-bg:rgba(100,150,240,0.18); --chip-blue-fg:#9DB9EA; --chip-red-bg:rgba(240,90,80,0.16); --chip-red-fg:#EBA39C; --chip-gray-bg:rgba(255,255,255,0.08); --chip-gray-fg:#A0A0A6;
     --banner-bg:rgba(230,180,80,0.12); --banner-border:rgba(230,180,80,0.30); --banner-fg:#D9BC85; --banner-sub:#C0A878; --banner-code-bg:rgba(230,180,80,0.12);
     --seg-track:#2A2A2E; --seg-sel-bg:#3E3E44;
   }
@@ -139,6 +143,19 @@ try {
   .row .chip { flex-shrink:0; font-size:11px; font-weight:500; padding:3px 8px; border-radius:4px; }
   .chip.green { background:var(--chip-green-bg); color:var(--chip-green-fg); }
   .chip.amber { background:var(--chip-amber-bg); color:var(--chip-amber-fg); }
+  /* Markdown runbooks: an MD tag and the H1 status chip on the title line,
+     Created/Updated after the filename, items-done count beside the date. */
+  .row .title .kind { margin-left:8px; font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:9.5px; font-weight:600; letter-spacing:0.4px; color:var(--text-dim); border:1px solid var(--line); border-radius:3px; padding:0 4px; vertical-align:2px; }
+  .row .title .status { margin-left:6px; font-size:10px; font-weight:600; letter-spacing:0.3px; padding:1px 6px; border-radius:3px; vertical-align:1px; white-space:nowrap; }
+  .status.done { background:var(--chip-green-bg); color:var(--chip-green-fg); }
+  .status.in-progress { background:var(--chip-blue-bg); color:var(--chip-blue-fg); }
+  .status.blocked { background:var(--chip-red-bg); color:var(--chip-red-fg); }
+  .status.awaiting { background:var(--chip-amber-bg); color:var(--chip-amber-fg); }
+  .status.pending, .status.other { background:var(--chip-gray-bg); color:var(--chip-gray-fg); }
+  .row .sub { display:flex; align-items:baseline; gap:10px; min-width:0; }
+  .row .sub .path { min-width:0; }
+  .row .dates { flex-shrink:0; font-size:11px; color:var(--text-dim); white-space:nowrap; }
+  .row .progress { flex-shrink:0; font-size:11px; font-variant-numeric:tabular-nums; color:var(--text-sub); }
   /* Shortcuts modal — same tokens as the rest of the page. */
   .modal-wrap { position:fixed; inset:0; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; z-index:10; }
   .modal { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:18px 20px 14px; width:min(400px, calc(100vw - 48px)); max-height:calc(100vh - 96px); overflow-y:auto; box-shadow:0 12px 40px rgba(0,0,0,0.25); }
@@ -432,7 +449,7 @@ try {
   var activeTab = 'whitelist';
   var setBusy = false;
   var SET_DESC = {
-    whitelist: 'What gets indexed: a folder name (docs), a full path (~/Documents/Codex), or an exact filename (report.html).',
+    whitelist: 'What gets indexed: a folder name (docs), a full path (~/Documents/Codex), or an exact filename (report.html, plan.md — a .md file is listed only when its frontmatter says runbook: true).',
     blacklist: 'Never indexed, even when whitelisted: folder names, paths, or exact filenames. Blacklist wins.'
   };
 
@@ -471,7 +488,7 @@ try {
       opts[i].classList.toggle('on', opts[i].getAttribute('data-settings-tab') === activeTab);
     }
     setDescEl.textContent = SET_DESC[activeTab];
-    setInputEl.placeholder = activeTab === 'whitelist' ? 'docs, ~/path, or name.html' : 'node_modules, ~/path, or name.html';
+    setInputEl.placeholder = activeTab === 'whitelist' ? 'docs, ~/path, name.html or name.md' : 'node_modules, ~/path, name.html or name.md';
     setListEl.textContent = '';
     setCountEl.textContent = '';
     if (!settings) { setListEl.appendChild(setEmptyEl('Loading rules…')); return; }

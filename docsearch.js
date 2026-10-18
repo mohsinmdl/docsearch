@@ -34,9 +34,36 @@
      Unchanged from the original flat list — titles are not part of this change. */
   function titleOf(path) {
     if (typeof path !== 'string' || !path) return 'Untitled';
-    var base = baseOf(path).replace(/\.html?$/i, '');
+    var base = baseOf(path).replace(/\.(html?|md)$/i, '');
     return base.replace(/[-_]+/g, ' ').trim() || 'Untitled';
   }
+
+  /* Markdown runbooks (kind 'md') arrive with what their text says about them:
+     the H1 title, the H1 status chip, Created/Updated dates and item progress.
+     HTML runbooks carry none of it and keep the filename title. */
+  function isMd(d) { return !!d && d.kind === 'md'; }
+
+  function displayTitleOf(d) {
+    return isMd(d) && typeof d.title === 'string' && d.title ? d.title : titleOf(d && d.path);
+  }
+
+  /* "created 2026-10-01 · updated 2026-10-05", either half optional. */
+  function datesOf(d) {
+    if (!isMd(d)) return '';
+    var parts = [];
+    if (d.created) parts.push('created ' + d.created);
+    if (d.updated) parts.push('updated ' + d.updated);
+    return parts.join(' · ');
+  }
+
+  /* "4/6" — items done of items total, as on the viewer's progress pill. */
+  function progressOf(d) {
+    var p = isMd(d) && d.progress;
+    if (!p || typeof p.total !== 'number' || p.total <= 0) return '';
+    return (p.done || 0) + '/' + p.total;
+  }
+
+  var STATES = { done: true, 'in-progress': true, blocked: true, awaiting: true, pending: true };
 
   function fileOf(path) {
     if (typeof path !== 'string' || !path) return '';
@@ -389,13 +416,51 @@
     txt.className = 'txt';
     var title = doc.createElement('div');
     title.className = 'title';
-    title.textContent = titleOf(d.path);
+    title.textContent = displayTitleOf(d);
     var file = doc.createElement('div');
     file.className = 'path';
     file.textContent = pathText || fileOf(d.path);
     txt.appendChild(title);
-    txt.appendChild(file);
+    var dates = datesOf(d);
+    if (dates) {
+      // Own slot beside the path, so a long flat-mode path ellipsizes instead
+      // of swallowing the dates.
+      var sub = doc.createElement('div');
+      sub.className = 'sub';
+      sub.appendChild(file);
+      var dl = doc.createElement('span');
+      dl.className = 'dates';
+      dl.textContent = dates;
+      if (d.updated_note) dl.setAttribute('title', 'Latest update: ' + d.updated_note);
+      sub.appendChild(dl);
+      txt.appendChild(sub);
+    } else {
+      txt.appendChild(file);
+    }
     a.appendChild(txt);
+
+    if (isMd(d)) {
+      // Badges ride the title line (dates went beside the path above); the date
+      // chip stays the file's mtime, the same clock every row is sorted on.
+      var kind = doc.createElement('span');
+      kind.className = 'kind';
+      kind.textContent = 'MD';
+      title.appendChild(kind);
+      if (d.status) {
+        var st = doc.createElement('span');
+        st.className = 'status ' + (STATES[d.state] ? d.state : 'other');
+        st.textContent = d.status;
+        title.appendChild(st);
+      }
+      var prog = progressOf(d);
+      if (prog) {
+        var pg = doc.createElement('span');
+        pg.className = 'progress';
+        pg.textContent = prog;
+        pg.setAttribute('title', prog.replace('/', ' of ') + ' items done');
+        a.appendChild(pg);
+      }
+    }
 
     if (selected) {
       var hint = doc.createElement('span');
@@ -414,6 +479,9 @@
 
   return {
     titleOf: titleOf,
+    displayTitleOf: displayTitleOf,
+    datesOf: datesOf,
+    progressOf: progressOf,
     fileOf: fileOf,
     dayKeyOf: dayKeyOf,
     dayLabelOf: dayLabelOf,

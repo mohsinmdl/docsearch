@@ -282,6 +282,163 @@ class TestViewAllowed(WalkTestCase):
             os.path.join(self.home, "docs", "..", "..", "etc", "passwd")))
 
 
+# ── Markdown runbooks (runbook skill 2.0+, rendered by MD Pretty Viewer) ────
+
+MD_RUNBOOK = """---
+runbook: true
+---
+# Roll out runbook template v2 [AWAITING REVIEW]
+
+> **Related:** `~/docs/other.html` \\
+> **Context:** The template grew too big. \\
+> **Purpose:** Plan of record for the rollout. \\
+> **Scope:** Template only. \\
+> **Created:** 2026-10-01 \\
+> **Updated:** 2026-10-02 — items 1–2 done. 2026-10-05 — item 3 blocked on DNS.
+
+[HIGH] can lose work · [LOW] easily redone
+
+## Summary
+
+| # | Item | Risk | Status |
+|---|---|---|---|
+| 1 | [Backups](#item-1) | [HIGH] | [DONE] |
+
+## Items
+
+### 1. Backups [HIGH] [DONE]
+
+**What's involved:** copy things.
+
+*Completed: 2026-10-02 — copied.*
+
+### 2. Write the template [CORRECTED 2026-10-03] [MED] [DONE]
+
+```
+### 9. Not an item [DONE]
+```
+
+### 3. Point DNS [LOW] [BLOCKED — waiting on DNS]
+
+### 4. Verify `[DONE]` stays in code [LOW] [PENDING]
+
+## Rollback
+
+### Not an item either [DONE]
+"""
+
+
+class TestMarkdownRunbooks(WalkTestCase):
+
+    def meta(self, text):
+        return self.ds.md_runbook_meta(text)
+
+    def test_md_runbooks_are_collected_next_to_html(self):
+        self.write("docs/old.html")
+        self.write("projects/app/docs/runbooks/new.md", body=MD_RUNBOOK)
+        self.assertEqual(self.rels(self.scan()),
+                         ["docs/old.html", "projects/app/docs/runbooks/new.md"])
+
+    def test_plain_md_without_frontmatter_is_ignored(self):
+        # READMEs, notes and skill references live in docs/ folders too.
+        plain = self.write("docs/README.md", body="# Readme [DONE]\n\nrunbook: true\n")
+        self.write("docs/other.md", body="---\ntitle: notes\n---\n# Notes\n")
+        self.write("docs/off.md", body="---\nrunbook: false\n---\n# Off\n")
+        self.assertEqual(self.scan(), [])
+        self.assertFalse(self.ds.view_allowed(plain))
+
+    def test_frontmatter_matches_the_viewers_rules(self):
+        for head in ("---\nrunbook: true\n---\n", "﻿---\nrunbook: true\n---\n",
+                     "---\r\nRunbook: \"yes\"\r\n---\r\n", "---\nowner: me\nrunbook: TRUE\n---\n"):
+            self.assertIsNotNone(self.meta(head + "# T\n"), repr(head))
+        for head in ("\n---\nrunbook: true\n---\n",   # must be the very first line
+                     "---\nrunbook: true\n",           # never closed
+                     "---\nrunbooks: true\n---\n"):
+            self.assertIsNone(self.meta(head + "# T\n"), repr(head))
+
+    def test_title_status_and_dates(self):
+        m = self.meta(MD_RUNBOOK)
+        self.assertEqual(m["title"], "Roll out runbook template v2")
+        self.assertEqual(m["status"], "AWAITING REVIEW")
+        self.assertEqual(m["state"], "awaiting")
+        self.assertEqual(m["created"], "2026-10-01")
+        self.assertEqual(m["updated"], "2026-10-05")
+        self.assertEqual(m["updated_note"], "item 3 blocked on DNS.")
+
+    def test_item_progress_follows_the_viewers_chip_rules(self):
+        # 1 DONE; 2 DONE behind a [CORRECTED …] note chip; 3 BLOCKED; 4 PENDING
+        # (a chip in backticks is code). Headings in fences and after the
+        # next ## are not items.
+        self.assertEqual(self.meta(MD_RUNBOOK)["progress"], {"done": 2, "total": 4})
+
+    def test_item_without_a_heading_chip_takes_one_from_its_body(self):
+        text = ("---\nrunbook: true\n---\n# T [IN PROGRESS]\n\n## Items\n\n"
+                "### 1. First\n\n| Check | Status |\n|---|---|\n| a | [DONE] |\n\n"
+                "### 2. Second [HIGH]\n\nnothing yet\n")
+        self.assertEqual(self.meta(text)["progress"], {"done": 1, "total": 2})
+
+    def test_missing_pieces_degrade_to_none(self):
+        m = self.meta("---\nrunbook: true\n---\nno heading, no meta, no items\n")
+        self.assertEqual((m["title"], m["status"], m["state"], m["created"],
+                          m["updated"], m["progress"]),
+                         (None, None, None, None, None, None))
+        m = self.meta("---\nrunbook: true\n---\n# Fresh [PENDING]\n\n"
+                      "> **Created:** 2026-10-18 \\\n> **Updated:** —\n")
+        self.assertEqual((m["created"], m["updated"], m["updated_note"]),
+                         ("2026-10-18", None, None))
+
+    def test_forced_style_chip_sets_the_status(self):
+        m = self.meta("---\nrunbook: true\n---\n# Ship it [done: SHIPPED 2026-10-20]\n")
+        self.assertEqual((m["title"], m["status"], m["state"]),
+                         ("Ship it", "SHIPPED 2026-10-20", "done"))
+
+    def test_wire_carries_md_metadata_and_leaves_html_alone(self):
+        self.write("docs/a.html")
+        self.write("docs/b.md", body=MD_RUNBOOK)
+        by = {d["rel"]: d for d in self.search("")}
+        self.assertEqual(sorted(by["docs/a.html"]), ["mtime", "path", "rel"])
+        md = by["docs/b.md"]
+        self.assertEqual(md["kind"], "md")
+        self.assertEqual(md["title"], "Roll out runbook template v2")
+        self.assertEqual(md["status"], "AWAITING REVIEW")
+        self.assertEqual(md["progress"], {"done": 2, "total": 4})
+        self.assertNotIn("size", md)
+
+    def test_md_body_text_is_searchable(self):
+        self.write("docs/b.md", body=MD_RUNBOOK)
+        self.write("docs/a.html", body="<p>nothing relevant</p>")
+        self.assertEqual(self.rels(self.search("template grew")), ["docs/b.md"])
+        self.assertEqual(self.rels(self.search("blocked dns")), ["docs/b.md"])
+        self.assertEqual(self.search("runbook: true"), [], "frontmatter is not body text")
+
+    def test_metadata_is_reparsed_when_the_file_changes(self):
+        path = self.write("docs/b.md", body=MD_RUNBOOK)
+        self.assertEqual(self.scan()[0]["md"]["status"], "AWAITING REVIEW")
+        stat = os.stat(path)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(MD_RUNBOOK.replace("[AWAITING REVIEW]", "[IN PROGRESS]"))
+        os.utime(path, (stat.st_mtime + 10, stat.st_mtime + 10))
+        self.assertEqual(self.scan()[0]["md"]["status"], "IN PROGRESS")
+
+    def test_a_file_that_drops_its_frontmatter_leaves_the_list(self):
+        path = self.write("docs/b.md", body=MD_RUNBOOK)
+        self.assertEqual(len(self.scan()), 1)
+        stat = os.stat(path)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# just notes now\n")
+        os.utime(path, (stat.st_mtime + 10, stat.st_mtime + 10))
+        self.assertEqual(self.scan(), [])
+        self.assertFalse(self.ds.view_allowed(path))
+
+    def test_filename_rules_accept_md(self):
+        self.assertEqual(self.ds.normalize_entry("plan.md"),
+                         {"type": "filename", "value": "plan.md"})
+        self.write("random/plan.md", body=MD_RUNBOOK)
+        self.write("random/other.md", body=MD_RUNBOOK)
+        self.use_settings(whitelist=["docs", "plan.md"])
+        self.assertEqual(self.rels(self.scan()), ["random/plan.md"])
+
+
 # ── whitelist/blacklist rules ───────────────────────────────────────────────
 
 class TestRuleNormalization(WalkTestCase):
@@ -471,6 +628,21 @@ class TestSettingsHttp(WalkTestCase):
         data = resp.read()
         conn.close()
         return resp.status, data
+
+    def test_view_serves_md_runbooks_as_markdown(self):
+        # text/markdown + a .md URL is what MD Pretty Viewer takes over.
+        self.write("docs/b.md", body=MD_RUNBOOK)
+        self.write("docs/README.md", body="# plain\n")
+        conn = self.http.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/view" + self.home + "/docs/b.md")
+        resp = conn.getresponse()
+        data = resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.getheader("Content-Type"), "text/markdown; charset=utf-8")
+        self.assertEqual(data.decode("utf-8"), MD_RUNBOOK)
+        status, _ = self.request("GET", "/view" + self.home + "/docs/README.md")
+        self.assertEqual(status, 403)
 
     def test_get_returns_current_rules(self):
         status, data = self.request("GET", "/api/settings")

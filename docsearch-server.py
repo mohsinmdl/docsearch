@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""docsearch — local web UI for the HTML runbooks scattered across $HOME.
+"""docsearch — local web UI for the runbooks scattered across $HOME.
 
 Serves the search page (index.html, from this script's directory) at
 http://127.0.0.1:8377. The corpus is every .html file that the whitelist/
 blacklist rules admit (by default: anything inside a folder named "docs",
-minus the usual vendor folders); results are newest first, and a query
+minus the usual vendor folders), plus every .md file in the same places whose
+frontmatter says `runbook: true`; results are newest first, and a query
 matches when every word appears in the file's home-relative path or its
 stripped body text.
+
+Markdown runbooks are what the runbook skill writes since its 2.0.0 (October
+2026); the user's MD Pretty Viewer Chrome extension renders them. Existing
+HTML runbooks stay HTML, so both kinds share one list.
 
 Rules are managed from the page's settings modal and persisted to
 settings.json next to this script (gitignored — machine state, not code).
@@ -48,6 +53,8 @@ SCAN_TTL = 45  # seconds a scanned corpus is served before a refresh is kicked o
 SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1\s*>", re.S | re.I)
 TAG_RE = re.compile(r"<[^>]+>")
 
+DOC_EXTS = (".html", ".md")
+
 # Reproduces the pre-settings behavior exactly: include /docs/ folders, skip
 # the vendor/VCS folders the old EXCLUDE regex and prune list covered. The
 # dot-named entries look redundant with the hardcoded hidden-dir rule below,
@@ -67,8 +74,8 @@ def normalize_entry(entry):
     """One raw rule (string or {type,value}) -> canonical {type,value}.
 
     Detection, after normalization: contains "/" -> path (absolute; a .html
-    suffix makes it a single-file rule); ends in .html -> filename (exact
-    basename); otherwise -> folder-name (exact path segment). Raises
+    or .md suffix makes it a single-file rule); ends in .html/.md -> filename
+    (exact basename); otherwise -> folder-name (exact path segment). Raises
     ValueError on anything unusable.
     """
     if isinstance(entry, dict):
@@ -90,7 +97,7 @@ def normalize_entry(entry):
     if typ is None:
         if "/" in value:
             typ = "path"
-        elif value.lower().endswith(".html"):
+        elif value.lower().endswith(DOC_EXTS):
             typ = "filename"
         else:
             typ = "folder-name"
@@ -101,8 +108,8 @@ def normalize_entry(entry):
         if value == "/":
             raise ValueError("refusing a rule for the filesystem root")
     elif typ == "filename":
-        if "/" in value or not value.lower().endswith(".html"):
-            raise ValueError("a filename rule is a bare *.html name: %s" % raw)
+        if "/" in value or not value.lower().endswith(DOC_EXTS):
+            raise ValueError("a filename rule is a bare *.html or *.md name: %s" % raw)
     elif typ == "folder-name":
         if "/" in value:
             raise ValueError("a folder-name rule is a single name, not a path: %s" % raw)
@@ -157,7 +164,7 @@ class Rules(object):
                 # realpath at compile time: a symlinked rule path must match
                 # the real paths the walk produces, or every click would 403.
                 real = os.path.realpath(rule["value"])
-                if rule["value"].lower().endswith(".html"):
+                if rule["value"].lower().endswith(DOC_EXTS):
                     file_roots.append(real)
                 else:
                     roots.append(real)
@@ -166,9 +173,12 @@ class Rules(object):
     def allowed(self, real):
         """Would the scan collect this (real) path? One answer for the walk
         filter, /view and /open, in strict precedence order:
-        blacklist > whitelisted path > hidden/outside-HOME > whitelist name."""
+        blacklist > whitelisted path > hidden/outside-HOME > whitelist name.
+
+        Path rules only: a .md path that passes still has to be a runbook by
+        its frontmatter (see collectable), which needs the file's content."""
         base = os.path.basename(real)
-        if base.startswith(".") or not base.lower().endswith(".html"):
+        if base.startswith(".") or not base.lower().endswith(DOC_EXTS):
             return False
         dir_segs = real.split(os.sep)[1:-1]
         # 1. blacklist always wins; the escape hatch is deleting the entry
@@ -209,12 +219,141 @@ class Rules(object):
         return any(path == r or path.startswith(r + os.sep) for r in self.bl_roots)
 
 
+# ── Markdown runbooks ───────────────────────────────────────────────────────
+# Every rule below mirrors MD Pretty Viewer (~/chrome-extensions/md-pretty-viewer:
+# parseFrontmatter in viewer.js, chips and item state in runbook.js), so the
+# status and "2 / 4 done" shown here agree with the pill on the rendered page.
+
+FRONTMATTER_RE = re.compile(r"\A﻿?---\r?\n(.*?)\r?\n---\r?\n", re.S)
+RUNBOOK_KEY_RE = re.compile(r"^runbook\s*:\s*(['\"]?)(?:true|yes)\1\s*$", re.I | re.M)
+MD_HEAD_BYTES = 16384  # enough to see a closed frontmatter; READMEs are never read whole
+
+# [style: any text]  or  [UPPERCASE TEXT] not followed by ( or [ (that's a link)
+CHIP_RE = re.compile(r"\[(?:([a-z][a-z0-9-]*):[ \t]*([^\[\]\n]*[^\s\[\]])|([A-Z0-9][^\[\]\n]*))\](?![(\[])")
+INLINE_CODE_RE = re.compile(r"(`+).*?\1")
+FENCE_RE = re.compile(r"^\s{0,3}(```|~~~)")
+META_RE = re.compile(r"^>\s*\*\*([^*:]+):\*\*\s*(.*?)\s*\\?\s*$")
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# "2026-10-02 — items 1–2 done. 2026-10-05 — item 3 blocked." -> dated entries
+UPDATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})\s*[—–-]+\s*(.*?)(?=\s*\d{4}-\d{2}-\d{2}\s*[—–-]|\Z)", re.S)
+
+LIFECYCLE = ("done", "in-progress", "blocked", "awaiting", "pending")
+CHIP_STYLES = [
+    (re.compile(r"^(DONE|CORRECTED)\b"), "done"),
+    (re.compile(r"^IN[ -]?PROGRESS\b"), "in-progress"),
+    (re.compile(r"^BLOCKED\b"), "blocked"),
+    (re.compile(r"^(AWAITING|SOAK\w*|WAITING)\b"), "awaiting"),
+    (re.compile(r"^PENDING\b"), "pending"),
+]
+
+
+def md_is_runbook(head):
+    """Frontmatter `runbook: true` (or yes, any case, optionally quoted) at the
+    very top of the file — the same test the viewer applies."""
+    m = FRONTMATTER_RE.match(head)
+    return bool(m and RUNBOOK_KEY_RE.search(m.group(1)))
+
+
+def md_body(text):
+    """The document without its frontmatter: what gets searched."""
+    m = FRONTMATTER_RE.match(text)
+    return text[m.end():] if m else text
+
+
+def _chips(line):
+    """[(text, lifecycle-state-or-None)] for each chip on a line, in order.
+    Chips inside `code` are code, not chips."""
+    out = []
+    for m in CHIP_RE.finditer(INLINE_CODE_RE.sub(" ", line)):
+        if m.group(1) is not None:
+            style = m.group(1)
+            out.append((m.group(2).strip(), style if style in LIFECYCLE else None))
+            continue
+        text = m.group(3).strip()
+        if any(c.islower() for c in text) or not any(c.isupper() for c in text):
+            continue
+        out.append((text, next((st for re_, st in CHIP_STYLES if re_.match(text)), None)))
+    return out
+
+
+def _state(chips):
+    """First lifecycle chip — a [CORRECTED …] chip is a note, not a status."""
+    for text, state in chips:
+        if state and not text.upper().startswith("CORRECTED"):
+            return text, state
+    return None
+
+
+def md_runbook_meta(text):
+    """Title, status and dates of a Markdown runbook; None if `text` isn't one.
+
+    Format (runbook skill template.md): `# Title [STATUS]`, then a blockquote
+    of `> **Label:** value \\` lines (Created, Updated, …), then `## Items` with
+    one `### N. Title [RISK] [STATUS]` per item. Anything missing is None
+    rather than an error — a half-written runbook still belongs in the list.
+    """
+    if not md_is_runbook(text):
+        return None
+    meta = {"title": None, "status": None, "state": None, "created": None,
+            "updated": None, "updated_note": None, "progress": None}
+    fields = {}
+    items = None        # None until "## Items"; then [[heading chips, body chips]]
+    in_items = False
+    fence = None
+    for line in md_body(text).splitlines():
+        f = FENCE_RE.match(line)
+        if fence:
+            if f and f.group(1) == fence:
+                fence = None
+            continue
+        if f:
+            fence = f.group(1)
+            continue
+        if meta["title"] is None and line.startswith("# "):
+            chips = _chips(line)
+            title = CHIP_RE.sub(" ", line[2:]).replace("`", "").replace("**", "")
+            meta["title"] = " ".join(title.split()) or None
+            hit = _state(chips)
+            if hit:
+                meta["status"], meta["state"] = hit
+            continue
+        m = META_RE.match(line)
+        if m and items is None:
+            fields.setdefault(m.group(1).strip().lower(), m.group(2))
+            continue
+        if re.match(r"#{1,2}\s", line):
+            in_items = bool(re.match(r"##\s+items\b", line, re.I))
+            if in_items and items is None:
+                items = []
+            continue
+        if in_items:
+            if line.startswith("### "):
+                items.append([_chips(line), []])
+            elif items:
+                items[-1][1].extend(_chips(line))
+
+    created = fields.get("created", "")
+    d = DATE_RE.search(created)
+    meta["created"] = d.group(0) if d else (created.strip(" —-") or None)
+    entries = UPDATE_RE.findall(fields.get("updated", ""))
+    if entries:
+        # latest is last by convention; max() also survives an out-of-order line
+        date, note = max(enumerate(entries), key=lambda e: (e[1][0], e[0]))[1]
+        meta["updated"], meta["updated_note"] = date, note.strip() or None
+    if items:
+        done = sum(1 for head, body in items
+                   if (_state(head) or _state(body) or (None, "pending"))[1] == "done")
+        meta["progress"] = {"done": done, "total": len(items)}
+    return meta
+
+
 _lock = threading.Lock()
 _corpus = []       # list of docs, newest first
 _scanned_at = 0.0  # time.time() of the last completed scan; 0 = never scanned
 _scan_stamp = 0    # same, as int, for the X-Docsearch-Last-Scan header
 _scanning = False  # a scan is in flight; don't start a second one
 _text_cache = {}   # path -> ((mtime, size), lowercased body text)
+_md_cache = {}     # .md path -> ((mtime, size), runbook meta, or None = not a runbook)
 _rules = None      # current Rules snapshot (set by load_settings/apply)
 _rules_gen = 0     # bumped on every rules swap; stale scans check it
 
@@ -260,6 +399,43 @@ def apply_settings(doc):
         return _rules
 
 
+def md_meta_of(path, st):
+    """Runbook meta for a .md file, or None when it isn't a runbook — cached
+    until (mtime, size) changes, so a rescan re-reads only edited files.
+
+    Plain .md files are common in docs/ folders (READMEs, notes), so only the
+    head is read to rule them out; a runbook is then read whole and parsed."""
+    key = (int(st.st_mtime), st.st_size)
+    with _lock:
+        hit = _md_cache.get(path)
+    if hit and hit[0] == key:
+        return hit[1]
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            head = f.read(MD_HEAD_BYTES)
+            meta = md_runbook_meta(head + f.read()) if md_is_runbook(head) else None
+    except OSError:
+        return None
+    with _lock:
+        _md_cache[path] = (key, meta)
+    return meta
+
+
+def collectable(rules, real):
+    """rules.allowed() plus the content test it can't make: a .md file is in
+    only if it is a runbook. Returns (stat, md meta) or None."""
+    if not rules.allowed(real):
+        return None
+    try:
+        st = os.stat(real)
+    except OSError:
+        return None  # vanished or unreadable between walk and stat
+    if not real.lower().endswith(".md"):
+        return st, None
+    meta = md_meta_of(real, st)
+    return (st, meta) if meta is not None else None
+
+
 def scan_corpus(rules):
     """Walk $HOME plus any whitelisted path roots. Returns (docs newest-first,
     unreadable dirs).
@@ -271,8 +447,15 @@ def scan_corpus(rules):
     """
     unreadable = []
     found = {}
+    md_seen = set()
 
-    def collect(path, st):
+    def collect(path):
+        if path.lower().endswith(".md"):
+            md_seen.add(path)
+        hit = collectable(rules, path)
+        if not hit:
+            return
+        st, meta = hit
         found[path] = {
             "path": path,
             # `rel` labels folder groups home-relative (~/projects/foo/docs);
@@ -282,19 +465,16 @@ def scan_corpus(rules):
             "mtime": int(st.st_mtime),
             "size": st.st_size,
         }
+        if meta is not None:
+            found[path]["md"] = meta
 
     def walk(top):
         for root, dirs, files in os.walk(top, onerror=lambda e: unreadable.append(e.filename)):
             dirs[:] = [d for d in dirs if not rules.prune(d, os.path.join(root, d))]
             for name in files:
                 path = os.path.join(root, name)
-                if path in found or not rules.allowed(path):
-                    continue
-                try:
-                    st = os.stat(path)
-                except OSError:
-                    continue  # vanished or unreadable between walk and stat
-                collect(path, st)
+                if path not in found:
+                    collect(path)
 
     walk(HOME)
     for top in rules.wl_roots:
@@ -303,14 +483,12 @@ def scan_corpus(rules):
         # and when it did, found{} dedupes. Roots are small; the cost is noise.
         walk(top)
     for path in rules.wl_file_roots:
-        if path in found or not rules.allowed(path):
-            continue
-        try:
-            st = os.stat(path)
-        except OSError:
-            continue
-        collect(path, st)
+        if path not in found:
+            collect(path)
 
+    with _lock:  # forget .md files that are gone, runbook or not
+        for gone in [p for p in _md_cache if p not in md_seen]:
+            del _md_cache[gone]
     docs = sorted(found.values(), key=lambda d: d["mtime"], reverse=True)
     return docs, unreadable
 
@@ -393,7 +571,10 @@ def text_of(doc):
         with _lock:
             _text_cache.pop(path, None)
         return ""  # deleted since the scan — matches nothing
-    body = html.unescape(TAG_RE.sub(" ", SCRIPT_STYLE_RE.sub(" ", raw))).lower()
+    if "md" in doc:
+        body = md_body(raw).lower()  # Markdown is already plain text
+    else:
+        body = html.unescape(TAG_RE.sub(" ", SCRIPT_STYLE_RE.sub(" ", raw))).lower()
     with _lock:
         _text_cache[path] = (key, body)
     return body
@@ -425,15 +606,22 @@ def run_search(query):
 
 
 def wire(doc):
-    """Response shape. The page reads only these three fields."""
-    return {"path": doc["path"], "rel": doc["rel"], "mtime": doc["mtime"]}
+    """Response shape: path, rel, mtime for every doc. A Markdown runbook adds
+    kind "md" and what its text says about it (title, status chip, created/
+    updated dates, item progress) — HTML runbooks have their title derived
+    from the filename on the page, as they always have."""
+    out = {"path": doc["path"], "rel": doc["rel"], "mtime": doc["mtime"]}
+    if "md" in doc:
+        out["kind"] = "md"
+        out.update(doc["md"])
+    return out
 
 
 def view_allowed(path):
     """The /view and /open guard: exactly the files the scan would collect."""
     with _lock:
         rules = _rules
-    return rules.allowed(os.path.realpath(path))
+    return collectable(rules, os.path.realpath(path)) is not None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -511,11 +699,20 @@ class Handler(BaseHTTPRequestHandler):
             if not p or not view_allowed(p):
                 self._send(403, "excluded by current settings")
                 return
+            real = os.path.realpath(p)
             try:
-                with open(os.path.realpath(p), "rb") as f:
-                    self._send(200, f.read(), "text/html; charset=utf-8")
+                with open(real, "rb") as f:
+                    body = f.read()
             except OSError as exc:
                 self._send(404, "not found: %s" % exc)
+                return
+            if real.lower().endswith(".md"):
+                # text/markdown on a .md URL is what MD Pretty Viewer takes
+                # over and renders as a runbook; without the extension Chrome
+                # shows the raw text, which is still readable.
+                self._send(200, body, "text/markdown; charset=utf-8")
+            else:
+                self._send(200, body, "text/html; charset=utf-8")
 
         else:
             self._send(404, "not found")

@@ -375,6 +375,60 @@ test('the selected row is marked and still a plain anchor', function () {
   assert.ok(row.getAttribute('href'));
 });
 
+// ── Markdown runbooks ──
+
+const MD = {
+  path: '/Users/dev/docs/runbook-template-v2-rollout.md',
+  rel: 'docs/runbook-template-v2-rollout.md',
+  mtime: at(2026, 10, 5, 9, 30),
+  kind: 'md',
+  title: 'Roll out runbook template v2',
+  status: 'BLOCKED — waiting on DNS',
+  state: 'blocked',
+  created: '2026-10-01',
+  updated: '2026-10-05',
+  updated_note: 'item 3 blocked on DNS.',
+  progress: { done: 2, total: 4 }
+};
+
+test('an md row shows its H1 title, MD tag, status chip, dates and progress', function () {
+  const row = DS.createRow(fakeDocument(), MD, {});
+  const all = descendants(row);
+  const title = all.find(el => el.className === 'title');
+  assert.equal(title.textContent, 'Roll out runbook template v2');
+  assert.equal(all.find(el => el.className === 'kind').textContent, 'MD');
+  const status = all.find(el => /^status /.test(el.className));
+  assert.equal(status.className, 'status blocked');
+  assert.equal(status.textContent, 'BLOCKED — waiting on DNS');
+  assert.equal(all.find(el => el.className === 'path').textContent, 'runbook-template-v2-rollout.md');
+  const dates = all.find(el => el.className === 'dates');
+  assert.equal(dates.textContent, 'created 2026-10-01 · updated 2026-10-05');
+  assert.equal(dates.getAttribute('title'), 'Latest update: item 3 blocked on DNS.');
+  assert.equal(all.find(el => el.className === 'progress').textContent, '2/4');
+  // Opening is the same /view link as HTML — the server sends text/markdown.
+  assert.equal(row.getAttribute('href'), '/view/Users/dev/docs/runbook-template-v2-rollout.md');
+});
+
+test('html rows get none of the md extras', function () {
+  const all = descendants(DS.createRow(fakeDocument(), FIXTURE[0], {}));
+  ['kind', 'dates', 'progress'].forEach(function (cls) {
+    assert.equal(all.find(el => el.className === cls), undefined, cls);
+  });
+  assert.equal(all.find(el => /^status/.test(el.className)), undefined);
+});
+
+test('md metadata degrades: missing title falls back to the filename, missing parts are omitted', function () {
+  const bare = { path: '/Users/dev/docs/half-written.md', rel: 'docs/half-written.md', mtime: at(2026, 10, 5), kind: 'md' };
+  assert.equal(DS.displayTitleOf(bare), 'half written');
+  assert.equal(DS.datesOf(bare), '');
+  assert.equal(DS.progressOf(bare), '');
+  assert.equal(DS.datesOf({ kind: 'md', created: '2026-10-01' }), 'created 2026-10-01');
+  assert.equal(DS.progressOf({ kind: 'md', progress: { done: 0, total: 0 } }), '');
+  const all = descendants(DS.createRow(fakeDocument(), Object.assign({}, bare, { status: 'REBUILD', state: null }), {}));
+  assert.equal(all.find(el => /^status /.test(el.className)).className, 'status other');
+  assert.equal(all.find(el => el.className === 'dates'), undefined);
+});
+
 // ── resilience ──
 
 test('missing or invalid metadata does not crash', function () {
