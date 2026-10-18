@@ -393,11 +393,11 @@ class TestMarkdownRunbooks(WalkTestCase):
                          ("Ship it", "SHIPPED 2026-10-20", "done"))
 
     def test_neutral_h1_chip_is_the_status_without_a_state(self):
-        # Real runbooks end as [DEPLOYED] or [REFERENCE]; the viewer shows
-        # that chip, so the list does too, in the neutral style.
-        m = self.meta("---\nrunbook: true\n---\n# Release cc.24 [HIGH] [DEPLOYED]\n")
+        # Real runbooks end as [REFERENCE] or [READY]; the viewer shows that
+        # chip, so the list does too, in the neutral style.
+        m = self.meta("---\nrunbook: true\n---\n# Mods explained [HIGH] [REFERENCE]\n")
         self.assertEqual((m["title"], m["status"], m["state"]),
-                         ("Release cc.24", "DEPLOYED", None))
+                         ("Mods explained", "REFERENCE", None))
         m = self.meta("---\nrunbook: true\n---\n# Mixed [REFERENCE] [DONE]\n")
         self.assertEqual((m["status"], m["state"]), ("DONE", "done"), "a lifecycle chip wins")
 
@@ -409,6 +409,42 @@ class TestMarkdownRunbooks(WalkTestCase):
     def test_unknown_forced_style_is_not_a_chip(self):
         m = self.meta("---\nrunbook: true\n---\n# T [shipped: TODAY]\n")
         self.assertEqual(m["status"], None)
+
+    # ext-v1.10 rules: what real runbooks write, without viewer-only syntax
+
+    def test_a_chip_may_carry_a_lowercase_reason_after_a_dash(self):
+        m = self.meta("---\nrunbook: true\n---\n# T [BLOCKED — waiting on DNS]\n")
+        self.assertEqual((m["title"], m["status"], m["state"]),
+                         ("T", "BLOCKED — waiting on DNS", "blocked"))
+        m = self.meta("---\nrunbook: true\n---\n# T [DONE 2026-07-05 – logged in as x]\n")
+        self.assertEqual(m["state"], "done", "en dash splits too")
+        for h1 in ("# T [Done — x]", "# T [BLOCKED - plain hyphen]"):
+            self.assertIsNone(self.meta("---\nrunbook: true\n---\n" + h1 + "\n")["status"], h1)
+
+    def test_extra_status_words_have_a_state_and_ambiguous_ones_stay_neutral(self):
+        cases = {"VERIFIED": "done", "PASS": "done", "DEPLOYED": "done", "COMPLETED": "done",
+                 "ON HOLD": "blocked", "FAIL": "blocked", "STANDBY": "awaiting",
+                 "INVESTIGATING": "in-progress", "TO DO": "pending",
+                 "READY": None, "REFERENCE": None, "SKIPPED": None, "PASSWORD RESET": None}
+        for word, state in cases.items():
+            m = self.meta("---\nrunbook: true\n---\n# T [%s]\n" % word)
+            self.assertEqual((m["status"], m["state"]), (word, state), word)
+
+    def test_steps_and_phases_sections_hold_items_but_topics_does_not(self):
+        for name, total in (("Steps", 2), ("Phases", 2), ("Item details", 2), ("Topics", None)):
+            text = ("---\nrunbook: true\n---\n# T\n\n## %s\n\n"
+                    "### 1. a [DONE]\n\n### 2. b [PENDING]\n" % name)
+            p = self.meta(text)["progress"]
+            self.assertEqual(p and p["total"], total, name)
+
+    def test_unnumbered_h3_is_a_group_label_not_an_item(self):
+        text = ("---\nrunbook: true\n---\n# T\n\n## Items\n\n"
+                "### Phase 0 — Pre-flight\n\n### 1. a [LOW] [DONE]\n\n"
+                "### Phase 1 — Delete\n\n| check | [DONE] |\n\n"   # outside any item
+                "### 2. b [LOW]\n\n### A3. lettered [LOW] [PENDING]\n")
+        # 1 done; 2 has no status chip and the [DONE] above it belongs to no
+        # item, so it stays pending; A3. is an item id too.
+        self.assertEqual(self.meta(text)["progress"], {"done": 1, "total": 3})
 
     def test_wire_carries_md_metadata_and_leaves_html_alone(self):
         self.write("docs/a.html")

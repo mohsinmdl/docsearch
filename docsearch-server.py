@@ -220,7 +220,7 @@ class Rules(object):
 
 
 # ── Markdown runbooks ───────────────────────────────────────────────────────
-# Every rule below mirrors MD Pretty Viewer (~/chrome-extensions/md-pretty-viewer:
+# Every rule below mirrors MD Pretty Viewer ext-v1.10 (~/chrome-extensions/md-pretty-viewer:
 # parseFrontmatter in viewer.js, chips and item state in runbook.js), so the
 # status and "2 / 4 done" shown here agree with the pill on the rendered page.
 
@@ -238,12 +238,15 @@ DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 UPDATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})\s*[—–-]+\s*(.*?)(?=\s*\d{4}-\d{2}-\d{2}\s*[—–-]|\Z)", re.S)
 
 LIFECYCLE = ("done", "in-progress", "blocked", "awaiting", "pending")
+# Style from the chip's leading word(s), as of ext-v1.10. Unlisted words are
+# neutral ("disp"); the list is short on purpose so authors can predict it.
 CHIP_STYLES = [
-    (re.compile(r"^(DONE|CORRECTED)\b"), "done"),
-    (re.compile(r"^IN[ -]?PROGRESS\b"), "in-progress"),
-    (re.compile(r"^BLOCKED\b"), "blocked"),
-    (re.compile(r"^(AWAITING|SOAK\w*|WAITING)\b"), "awaiting"),
-    (re.compile(r"^PENDING\b"), "pending"),
+    (re.compile(r"^(DONE|CORRECTED|VERIFIED|PASS(ED)?|LIVE|DEPLOYED|CONFIRMED|RESOLVED"
+                r"|CLEARED|SHIPPED|MERGED|FIXED|COMPLETED?)\b"), "done"),
+    (re.compile(r"^(IN[ -]?PROGRESS|INVESTIGATING)\b"), "in-progress"),
+    (re.compile(r"^(BLOCKED|ON HOLD|DEFERRED|NOT VERIFIED|FAIL(ED)?)\b"), "blocked"),
+    (re.compile(r"^(AWAITING|SOAK\w*|WAITING|STANDBY|TO CONFIRM)\b"), "awaiting"),
+    (re.compile(r"^(PENDING|PLANNED|TODO|TO DO)\b"), "pending"),
     (re.compile(r"^HIGH\b"), "risk-high"),
     (re.compile(r"^MED(IUM)?\b"), "risk-med"),
     (re.compile(r"^LOW\b"), "risk-low"),
@@ -256,6 +259,14 @@ CHIP_STYLES = [
 FORCED_STYLES = dict((s, s) for s in LIFECYCLE + (
     "risk-high", "risk-med", "risk-low", "portable",
     "priority-1", "priority-2", "priority-3", "disp"))
+# [BLOCKED — waiting on DNS]: only the part before " — " / " – " must be
+# uppercase; the reason after it is free text. A plain hyphen doesn't split.
+REASON_SEP = re.compile(r"\s[—–]\s")
+# Sections that hold the items (first matching H2 only), and item headings:
+# "### 3. Title", "### 3) Title", "### A1. Title". Any other ### inside the
+# section is a group label ("### Phase 1 — Rollout"): not an item.
+ITEMS_H2 = re.compile(r"^(items|steps|phases|tasks|item details|step details)\b", re.I)
+ITEM_ID = re.compile(r"^([A-Z]?\d+)[.)]")
 FORCED_STYLES.update({"high": "risk-high", "med": "risk-med", "medium": "risk-med",
                       "low": "risk-low", "p1": "priority-1", "p2": "priority-2",
                       "p3": "priority-3", "disposition": "disp"})
@@ -286,10 +297,18 @@ def _chips(line):
                 out.append((m.group(2).strip(), style))
             continue
         text = m.group(3).strip()
-        if any(c.islower() for c in text) or not any(c.isupper() for c in text):
+        head = REASON_SEP.split(text, 1)[0]
+        if any(c.islower() for c in head) or not any(c.isupper() for c in head):
             continue
-        out.append((text, next((st for re_, st in CHIP_STYLES if re_.match(text)), "disp")))
+        out.append((text, next((st for re_, st in CHIP_STYLES if re_.match(head)), "disp")))
     return out
+
+
+def _plain(heading):
+    """A heading's text as the viewer tests it: chips, markup and the #s gone."""
+    text = re.sub(r"^#+\s+", "", heading)
+    text = CHIP_RE.sub(" ", INLINE_CODE_RE.sub(lambda m: m.group(0).strip("`"), text))
+    return " ".join(re.sub(r"[*_`\\]", "", text).split())
 
 
 def _state(chips):
@@ -304,8 +323,8 @@ def md_runbook_meta(text):
     """Title, status and dates of a Markdown runbook; None if `text` isn't one.
 
     Format (runbook skill template.md): `# Title [STATUS]`, then a blockquote
-    of `> **Label:** value \\` lines (Created, Updated, …), then `## Items` with
-    one `### N. Title [RISK] [STATUS]` per item. Anything missing is None
+    of `> **Label:** value \\` lines (Created, Updated, …), then `## Items` (or
+    Steps, Phases, …) with one `### N. Title [RISK] [STATUS]` per item. Anything missing is None
     rather than an error — a half-written runbook still belongs in the list.
     """
     if not md_is_runbook(text):
@@ -313,8 +332,9 @@ def md_runbook_meta(text):
     meta = {"title": None, "status": None, "state": None, "created": None,
             "updated": None, "updated_note": None, "progress": None}
     fields = {}
-    items = None        # None until "## Items"; then [[heading chips, body chips]]
+    items = None        # None until the items section; then [[heading chips, body chips]]
     in_items = False
+    card = None         # the item collecting body chips; a group label closes it
     fence = None
     for line in md_body(text).splitlines():
         f = FENCE_RE.match(line)
@@ -343,16 +363,20 @@ def md_runbook_meta(text):
             fields.setdefault(m.group(1).strip().lower(), m.group(2))
             continue
         if re.match(r"#{1,2}\s", line):
-            # Only the first Items section makes cards in the viewer.
-            in_items = items is None and bool(re.match(r"##\s+items\b", line, re.I))
+            # Only the first items section makes cards in the viewer.
+            in_items = (items is None and line.startswith("## ")
+                        and bool(ITEMS_H2.match(_plain(line))))
             if in_items:
                 items = []
+            card = None
             continue
         if in_items:
             if line.startswith("### "):
-                items.append([_chips(line), []])
-            elif items:
-                items[-1][1].extend(_chips(line))
+                card = [_chips(line), []] if ITEM_ID.match(_plain(line)) else None
+                if card:
+                    items.append(card)
+            elif card:
+                card[1].extend(_chips(line))
 
     created = fields.get("created", "")
     d = DATE_RE.search(created)
