@@ -392,6 +392,24 @@ class TestMarkdownRunbooks(WalkTestCase):
         self.assertEqual((m["title"], m["status"], m["state"]),
                          ("Ship it", "SHIPPED 2026-10-20", "done"))
 
+    def test_neutral_h1_chip_is_the_status_without_a_state(self):
+        # Real runbooks end as [DEPLOYED] or [REFERENCE]; the viewer shows
+        # that chip, so the list does too, in the neutral style.
+        m = self.meta("---\nrunbook: true\n---\n# Release cc.24 [HIGH] [DEPLOYED]\n")
+        self.assertEqual((m["title"], m["status"], m["state"]),
+                         ("Release cc.24", "DEPLOYED", None))
+        m = self.meta("---\nrunbook: true\n---\n# Mixed [REFERENCE] [DONE]\n")
+        self.assertEqual((m["status"], m["state"]), ("DONE", "done"), "a lifecycle chip wins")
+
+    def test_only_the_first_items_section_counts(self):
+        text = ("---\nrunbook: true\n---\n# T\n\n## Items\n\n### 1. a [DONE]\n\n"
+                "## Items (archive)\n\n### 2. b [DONE]\n")
+        self.assertEqual(self.meta(text)["progress"], {"done": 1, "total": 1})
+
+    def test_unknown_forced_style_is_not_a_chip(self):
+        m = self.meta("---\nrunbook: true\n---\n# T [shipped: TODAY]\n")
+        self.assertEqual(m["status"], None)
+
     def test_wire_carries_md_metadata_and_leaves_html_alone(self):
         self.write("docs/a.html")
         self.write("docs/b.md", body=MD_RUNBOOK)

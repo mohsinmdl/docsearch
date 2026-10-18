@@ -244,7 +244,21 @@ CHIP_STYLES = [
     (re.compile(r"^BLOCKED\b"), "blocked"),
     (re.compile(r"^(AWAITING|SOAK\w*|WAITING)\b"), "awaiting"),
     (re.compile(r"^PENDING\b"), "pending"),
+    (re.compile(r"^HIGH\b"), "risk-high"),
+    (re.compile(r"^MED(IUM)?\b"), "risk-med"),
+    (re.compile(r"^LOW\b"), "risk-low"),
+    (re.compile(r"^PORTABLE\b"), "portable"),
+    (re.compile(r"^P1\b"), "priority-1"),
+    (re.compile(r"^P2\b"), "priority-2"),
+    (re.compile(r"^P3\b"), "priority-3"),
 ]
+# The explicit [style: text] form: these names, plus the viewer's short aliases.
+FORCED_STYLES = dict((s, s) for s in LIFECYCLE + (
+    "risk-high", "risk-med", "risk-low", "portable",
+    "priority-1", "priority-2", "priority-3", "disp"))
+FORCED_STYLES.update({"high": "risk-high", "med": "risk-med", "medium": "risk-med",
+                      "low": "risk-low", "p1": "priority-1", "p2": "priority-2",
+                      "p3": "priority-3", "disposition": "disp"})
 
 
 def md_is_runbook(head):
@@ -261,26 +275,28 @@ def md_body(text):
 
 
 def _chips(line):
-    """[(text, lifecycle-state-or-None)] for each chip on a line, in order.
-    Chips inside `code` are code, not chips."""
+    """[(text, style)] for each chip on a line, in order — style is a lifecycle
+    state, a risk/priority style, or "disp" for any other uppercase word (a
+    neutral tag such as [DEPLOYED]). Chips inside `code` are code."""
     out = []
     for m in CHIP_RE.finditer(INLINE_CODE_RE.sub(" ", line)):
         if m.group(1) is not None:
-            style = m.group(1)
-            out.append((m.group(2).strip(), style if style in LIFECYCLE else None))
+            style = FORCED_STYLES.get(m.group(1))
+            if style:  # an unknown style name isn't a chip in the viewer either
+                out.append((m.group(2).strip(), style))
             continue
         text = m.group(3).strip()
         if any(c.islower() for c in text) or not any(c.isupper() for c in text):
             continue
-        out.append((text, next((st for re_, st in CHIP_STYLES if re_.match(text)), None)))
+        out.append((text, next((st for re_, st in CHIP_STYLES if re_.match(text)), "disp")))
     return out
 
 
 def _state(chips):
     """First lifecycle chip — a [CORRECTED …] chip is a note, not a status."""
-    for text, state in chips:
-        if state and not text.upper().startswith("CORRECTED"):
-            return text, state
+    for text, style in chips:
+        if style in LIFECYCLE and not text.upper().startswith("CORRECTED"):
+            return text, style
     return None
 
 
@@ -316,14 +332,20 @@ def md_runbook_meta(text):
             hit = _state(chips)
             if hit:
                 meta["status"], meta["state"] = hit
+            else:
+                # A neutral H1 chip ([DEPLOYED], [REFERENCE]) is still the
+                # doc's status as the viewer shows it, just without a state.
+                tag = next((t for t, st in chips if st == "disp"), None)
+                meta["status"] = tag
             continue
         m = META_RE.match(line)
         if m and items is None:
             fields.setdefault(m.group(1).strip().lower(), m.group(2))
             continue
         if re.match(r"#{1,2}\s", line):
-            in_items = bool(re.match(r"##\s+items\b", line, re.I))
-            if in_items and items is None:
+            # Only the first Items section makes cards in the viewer.
+            in_items = items is None and bool(re.match(r"##\s+items\b", line, re.I))
+            if in_items:
                 items = []
             continue
         if in_items:
