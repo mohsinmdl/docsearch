@@ -969,6 +969,19 @@ class TestSettingsHttp(WalkTestCase):
             self.assertEqual(status, 415, path)
         self.assertFalse(os.path.exists(self.ds.SETTINGS_PATH), "rules unchanged")
 
+    def test_only_loopback_host_names_are_answered(self):
+        # DNS rebinding: a hostile name resolving to 127.0.0.1 is same-origin
+        # to the browser, but its Host header gives it away.
+        self.write("docs/a.html")
+        for host in ("127.0.0.1:%d" % self.port, "localhost:%d" % self.port, "LOCALHOST", "[::1]:8377"):
+            status, _, _ = self.request_full("GET", "/search?q=", extra={"Host": host})
+            self.assertEqual(status, 200, host)
+        for host in ("evil.example:%d" % self.port, "127.0.0.1.evil.example", ""):
+            for method, path, body in (("GET", "/search?q=", None), ("GET", "/api/settings", None),
+                                       ("POST", "/api/locate", json.dumps({"name": "a.html", "size": 1, "mtime": 1}))):
+                status, _, _ = self.request_full(method, path, body, extra={"Host": host})
+                self.assertEqual(status, 403, (host, path))
+
     def test_locate_over_the_wire(self):
         path = self.write("notes/plan.html")
         st = os.stat(path)

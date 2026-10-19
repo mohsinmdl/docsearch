@@ -857,7 +857,7 @@ def _inject_mermaid(body):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "docsearch/2.3.0"
+    server_version = "docsearch/2.3.1"
 
     def _send(self, code, body, ctype="text/plain; charset=utf-8", headers=None):
         if isinstance(body, str):
@@ -873,7 +873,23 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(self, code, obj):
         self._send(code, json.dumps(obj), "application/json; charset=utf-8")
 
+    LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+
+    def _host_ok(self):
+        """DNS-rebinding guard. A hostile site can point its own name at
+        127.0.0.1, and the browser then treats it as same-origin with this
+        server, so CORS stops nothing. Its requests still carry that name in
+        Host, though, and only loopback names are answered."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        name = host.rsplit(":", 1)[0] if not host.endswith("]") else host
+        if name in self.LOCAL_HOSTS:
+            return True
+        self._send(403, "docsearch only answers on 127.0.0.1 / localhost")
+        return False
+
     def do_GET(self):
+        if not self._host_ok():
+            return
         url = urlparse(self.path)
         params = parse_qs(url.query)
 
@@ -971,6 +987,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "not found")
 
     def do_POST(self):
+        if not self._host_ok():
+            return
         url = urlparse(self.path)
         if url.path not in ("/api/settings", "/api/locate"):
             self._send(404, "not found")
