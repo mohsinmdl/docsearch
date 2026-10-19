@@ -701,7 +701,7 @@ try {
   function closeDrop() {
     if (dropBusy || dropEl.classList.contains('hidden')) return;
     dropEl.classList.add('hidden');
-    qEl.focus();
+    qEl.focus({ preventScroll: true }); // keep the list where revealPath scrolled it
   }
   dropEl.addEventListener('click', function (e) { if (e.target === dropEl) closeDrop(); });
 
@@ -783,14 +783,15 @@ try {
       if (m.blacklisted) nodes.push(el('div', 'set-msg', 'A blacklist rule excludes this file, and the blacklist wins, so whitelisting it won’t make it show up.'));
       if (m.runbook === false && !m.indexed) nodes.push(el('div', 'set-msg', 'Not a runbook (no runbook: true frontmatter). Whitelist this file lists it anyway; a folder rule only picks up runbook .md files.'));
       var buttons = [dropBtn(m.indexed && !m.folder_ok ? 'Close' : 'Cancel', closeDrop)];
-      if (m.folder_ok) buttons.push(dropBtn('Whitelist folder', function () { addWhitelistPath(m.folder, m.folder_label); }, m.indexed));
-      if (!m.indexed) buttons.push(dropBtn('Whitelist this file', function () { addWhitelistPath(m.path, m.label); }, true));
+      if (m.folder_ok) buttons.push(dropBtn('Whitelist folder', function () { addWhitelistPath(m.folder, m.folder_label, { path: m.path, folder: m.folder }); }));
+      if (m.indexed) buttons.push(dropBtn('Show in list', function () { closeDrop(); revealPath(m.path); }, true));
+      if (!m.indexed) buttons.push(dropBtn('Whitelist this file', function () { addWhitelistPath(m.path, m.label, { path: m.path }); }, true));
       openDrop(nodes, buttons);
     }
     render();
   }
 
-  function addWhitelistPath(value, label) {
+  function addWhitelistPath(value, label, reveal) {
     if (dropBusy) return;
     dropBusy = true;
     var buttons = dropActsEl.querySelectorAll('button');
@@ -811,7 +812,7 @@ try {
       .then(function (res) {
         if (!res.ok || !res.body.ok) throw new Error(res.body.error || 'save failed');
         settings = res.body.settings;
-        search(qEl.value.trim(), { keepSel: true });
+        search(qEl.value.trim()).then(function () { revealPath(reveal.path, reveal.folder); });
         dropBusy = false;
         var done = el('div', 'drop-body', 'Added ');
         done.appendChild(el('span', 'drop-path', label));
@@ -1145,6 +1146,29 @@ try {
   function goToEntry(i) {
     entries[i].heads.forEach(function (id) { expanded[id] = true; });
     repaintTo({ doc: entries[i].doc });
+  }
+  /* Select a runbook by path wherever it sits — an older file lands far down
+     the newest-first list — opening its folder/date groups on the way. With
+     `folder`, fall back to the newest runbook in that folder (a folder rule
+     can admit files other than the one dropped). A query that hides it is
+     cleared first. */
+  function revealPath(path, folder) {
+    function find() {
+      for (var i = 0; i < entries.length; i++) if (entries[i].doc.path === path) return i;
+      if (folder) {
+        for (var j = 0; j < entries.length; j++) if (entries[j].doc.path.indexOf(folder + '/') === 0) return j;
+      }
+      return -1;
+    }
+    var at = find();
+    if (at !== -1) { goToEntry(at); return Promise.resolve(true); }
+    if (!qEl.value.trim()) return Promise.resolve(false);
+    qEl.value = '';
+    return search('').then(function () {
+      var again = find();
+      if (again !== -1) goToEntry(again);
+      return again !== -1;
+    });
   }
   /* ⌘↓/⌘↑ — pure group-to-group motion, expanding nothing. From inside a group
      ⌘↑ lands on that group's own head first, simply because it is the nearest
