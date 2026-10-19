@@ -8,7 +8,7 @@ runbook: true
 > **Purpose:** Plan of record for letting the user drop one `.html` or `.md` file onto the page and whitelist that file, or its whole parent folder. \
 > **Scope:** In: a guarded Spotlight lookup endpoint, the drag overlay and whitelist dialog, server unit tests, a headless Chrome drop test, the v2.3.0 release and service restart. Out: folder drops, multi-file drops, other file types. \
 > **Created:** 2026-10-19 \
-> **Updated:** 2026-10-19 — created from the approved plan; execution started. 2026-10-19 — item 1 done. 2026-10-19 — items 2–5 done; v2.3.0 released and live; guard, lookup and test details corrected. 2026-10-19 — v2.3.1 adds a loopback-only Host check. 2026-10-19 — your real Finder drop worked; rollout done.
+> **Updated:** 2026-10-19 — created from the approved plan; execution started. 2026-10-19 — item 1 done. 2026-10-19 — items 2–5 done; v2.3.0 released and live; guard, lookup and test details corrected. 2026-10-19 — v2.3.1 adds a loopback-only Host check. 2026-10-19 — your real Finder drop worked; rollout done. 2026-10-19 — v2.3.2 puts the folder on its own line; buttons fit one row.
 
 [HIGH] could lose data or leave the service down with no quick undo (none in this plan) · [MED] changes server code, page code or the running service; undo is a revert plus a restart · [LOW] read-only checks or test-only code
 
@@ -175,6 +175,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8377/api/locat
 *Completed: 2026-10-19 — overlay, dialog and keyboard handling in `index.html`, plus a help-panel row. A folder rule for `~` itself is never offered.*
 
 *Note: 2026-10-19 — a real Finder drop of `~/projects/claude skills/runbook backup_v3/SKILL.md` found the path (spaces included) and showed the frontmatter warning. A long folder name pushes **Whitelist this file** onto its own row.*
+
+*Completed: 2026-10-19 — v2.3.2 shows the folder on its own line and shortens the button to **Whitelist folder**; paths wrap at spaces. Headless check: one button row for a long folder name with spaces.*
 
 ### 4. Tests: server unit tests and headless drop test [LOW] [CORRECTED 2026-10-19] [DONE]
 

@@ -857,7 +857,7 @@ def _inject_mermaid(body):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "docsearch/2.3.1"
+    server_version = "docsearch/2.3.2"
 
     def _send(self, code, body, ctype="text/plain; charset=utf-8", headers=None):
         if isinstance(body, str):
