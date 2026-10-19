@@ -90,6 +90,10 @@ try {
   .bulk a { color:var(--text-sub); cursor:pointer; }
   .bulk a:hover { color:var(--text); }
   .bulk i { font-style:normal; }
+  /* Wrapper so the gap between Re-sync and the bulk links matches the gap
+     inside them (7px), not the wider status-row gap. */
+  .acts { display:flex; gap:7px; flex-shrink:0; }
+  #resync.busy a { color:var(--text-dim); cursor:default; pointer-events:none; }
 
   .list-wrap { padding:0 24px 28px; display:flex; justify-content:center; }
   .list { width:100%; max-width:720px; display:flex; flex-direction:column; }
@@ -231,6 +235,8 @@ try {
       <div class="sc-row"><span>Group by date</span><span class="keys"><kbd>g</kbd><kbd>d</kbd></span></div>
       <div class="sc-row"><span>Expand all</span><span class="keys"><kbd>g</kbd><kbd>e</kbd></span></div>
       <div class="sc-row"><span>Collapse all</span><span class="keys"><kbd>g</kbd><kbd>c</kbd></span></div>
+      <div class="sc-sec">Index</div>
+      <div class="sc-row"><span>Re-scan for new files <span class="k-note">(the list also catches up on its own)</span></span><span class="keys"><kbd>g</kbd><kbd>r</kbd></span></div>
       <div class="sc-sec">Settings</div>
       <div class="sc-row"><span>Search rules (whitelist / blacklist)</span><span class="keys"><kbd>g</kbd><kbd>s</kbd></span></div>
       <div class="sc-sec">Appearance</div>
@@ -275,7 +281,14 @@ try {
   <div class="status-wrap">
     <div class="status-row">
       <span id="status">…</span>
-      <span class="bulk hidden" id="bulk"><a data-bulk="expand" title="ge">Expand all</a><i>·</i><a data-bulk="collapse" title="gc">Collapse all</a></span>
+      <!-- Re-sync sits outside #bulk because #bulk hides when the list is
+           ungrouped or the server is down — both states where re-scanning is
+           still the useful thing to offer. #bulk owns the separator before it
+           so no dot dangles when it goes. -->
+      <span class="acts">
+        <span class="bulk" id="resync"><a id="resync-btn" title="Re-scan for new or moved files (gr)">Re-sync</a></span>
+        <span class="bulk hidden" id="bulk"><i>·</i><a data-bulk="expand" title="ge">Expand all</a><i>·</i><a data-bulk="collapse" title="gc">Collapse all</a></span>
+      </span>
     </div>
   </div>
 
@@ -295,6 +308,8 @@ try {
   var segEl = document.getElementById('seg');
   var grpEl = document.getElementById('grp');
   var bulkEl = document.getElementById('bulk');
+  var resyncEl = document.getElementById('resync');
+  var resyncBtn = document.getElementById('resync-btn');
   var helpEl = document.getElementById('help');
   var helpBtn = document.getElementById('help-btn');
   var settingsEl = document.getElementById('settings');
@@ -327,7 +342,12 @@ try {
   var entries = [];       // every doc + the heads that hide it — the space the arrows walk
   var sel = -1;           // index into `visible`: the cursor sits on a doc OR a head, -1 = nowhere
   var offline = false;
-  var lastIndexed = null; // Date of last successful fetch
+  /* The server's own last-scan stamp (unix seconds), not the time of our fetch:
+     stale-while-revalidate means a response can be much older than the request
+     that carried it, and the status row must say so. */
+  var lastScan = 0;
+  var resyncBusy = false;         // a forced rescan is in flight
+  var catchUpTimer = 0, catchUpTries = 0;
   var debounceTimer = null;
   var reqSeq = 0;
 
@@ -666,14 +686,20 @@ try {
     listEl.textContent = '';
     var q = qEl.value.trim();
 
+    /* The freshness suffix is the point of the Re-sync pair: without it
+       "142 runbooks" reads identically whether the walk ran three seconds or
+       forty minutes ago, so a missing file looks like a bug rather than a
+       stale index. */
+    var age = ' · indexed ' + DS.agoOf(lastScan);
+
     if (offline) {
       statusEl.textContent = docs.length
-        ? docs.length + ' runbooks · last indexed ' + (lastIndexed ? DS.stampOf(lastIndexed.getTime() / 1000) : '—')
+        ? docs.length + ' runbooks · offline' + age
         : 'server offline';
     } else if (q) {
-      statusEl.textContent = docs.length + (docs.length === 1 ? ' match' : ' matches') + ' for “' + q + '”';
+      statusEl.textContent = docs.length + (docs.length === 1 ? ' match' : ' matches') + ' for “' + q + '”' + age;
     } else {
-      statusEl.textContent = docs.length + ' runbooks · newest first';
+      statusEl.textContent = docs.length + ' runbooks · newest first' + age;
     }
 
     if (!docs.length && !offline) {
@@ -747,23 +773,70 @@ try {
   /* The catch covers the fetch only. Anything thrown while shaping or painting
      the results is a bug, and must not be repackaged as "server offline" — let
      it reach the console. */
-  function search(q) {
+  /* opts.fresh  — force a rescan server-side before answering (the Re-sync link).
+     opts.keepSel — hold the cursor still across the repaint. setDocs resets it,
+                    which is right when the *results* changed under you, and
+                    wrong for a re-scan of the same query: nothing you were
+                    looking at moved, so the cursor must not either. */
+  function search(q, opts) {
+    opts = opts || {};
     var seq = ++reqSeq;
-    fetch('/search?q=' + encodeURIComponent(q))
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    clearTimeout(catchUpTimer); // any pending catch-up is about to be moot
+    return fetch('/search?q=' + encodeURIComponent(q) + (opts.fresh ? '&fresh=1' : ''))
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.status);
+        // Headers first: the scan stamp and the "more is coming" flag ride
+        // alongside the body, which has to stay a bare array for setDocs.
+        var scan = parseInt(r.headers.get('X-Docsearch-Last-Scan'), 10) || 0;
+        var busy = r.headers.get('X-Docsearch-Rescanning') === '1';
+        return r.json().then(function (data) { return { data: data, scan: scan, busy: busy }; });
+      })
       .catch(function () {
         if (seq !== reqSeq) return null;
         offline = true;
         render();
         return null;
       })
-      .then(function (data) {
-        if (seq !== reqSeq || data === null) return; // stale, or already handled as offline
-        setDocs(data); offline = false; lastIndexed = new Date();
+      .then(function (res) {
+        if (seq !== reqSeq || res === null) return; // stale, or already handled as offline
+        var anchor = opts.keepSel ? selAnchor() : null;
+        setDocs(res.data); offline = false; lastScan = res.scan;
+        if (anchor) restoreSel(anchor);
         render();
         if (restoring) { applyRestore(restoring); restoring = null; }
+        if (res.busy) scheduleCatchUp(q); else catchUpTries = 0;
       });
   }
+
+  /* The server has just admitted a background walk is in flight, which means
+     this response is the *old* corpus and the new one is a single request
+     away. Fetch it once it lands instead of leaving a stale list on screen
+     until someone reloads — this is why a newly-copied file turns up on its
+     own. Bounded, because a pathologically slow walk would otherwise poll
+     forever; typing cancels it via the clearTimeout in search(). */
+  function scheduleCatchUp(q) {
+    if (catchUpTries >= 6) return;
+    catchUpTries++;
+    catchUpTimer = setTimeout(function () { search(q, { keepSel: true }); }, 1500);
+  }
+
+  /* Re-sync: the impatient path to the same place. Synchronous rescan, then
+     repaint in place — open groups survive on their own (head ids are derived
+     from the folder/date, not from position) and keepSel holds the cursor. */
+  function resync() {
+    if (resyncBusy) return; // one walk at a time; a second click must not queue another
+    resyncBusy = true;
+    resyncEl.classList.add('busy');
+    resyncBtn.textContent = 'Re-syncing…';
+    search(qEl.value.trim(), { fresh: true, keepSel: true })
+      .catch(function () {})   // offline is already handled inside search()
+      .then(function () {
+        resyncBusy = false;
+        resyncEl.classList.remove('busy');
+        resyncBtn.textContent = 'Re-sync';
+      });
+  }
+  resyncBtn.addEventListener('click', resync);
 
   /* Put the cursor and the scroll position back after the first paint — the
      open groups were already seeded before the fetch, so the list is the right
@@ -918,7 +991,7 @@ try {
     return true;
   }
 
-  var pendingG = 0; // timestamp of a 'g' awaiting its chord partner (gf/gd/ge/gc)
+  var pendingG = 0; // timestamp of a 'g' awaiting its chord partner (gf/gd/ge/gc/gs/gr)
   window.addEventListener('keydown', function (e) {
     /* Settings modal first: Esc closes, everything else passes through
        untouched (NO preventDefault) — its text input needs real typing, and
@@ -952,6 +1025,7 @@ try {
         if (ck === 'f' || ck === 'd') { e.preventDefault(); toggleGroup(ck === 'f' ? 'folder' : 'date'); return; }
         if (ck === 'e' || ck === 'c') { e.preventDefault(); setAllHeads(ck === 'e'); return; }
         if (ck === 's') { e.preventDefault(); showSettings(true); return; }
+        if (ck === 'r') { e.preventDefault(); resync(); return; }
       }
       if (ck === 'g') { pendingG = Date.now(); e.preventDefault(); return; }
     }

@@ -99,6 +99,30 @@
     return MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
+  /* How long ago the index was built, for the status row. Takes an injectable
+     `now` (same shape as isRecent) so the tests don't depend on the clock.
+
+     The buckets are deliberately coarse: this number exists to answer "is what
+     I'm looking at current?", not to be a timer. JUST_NOW is wide enough to
+     cover a walk plus a repaint — a Re-sync that finished 3s ago must not
+     already read "1m ago", or a successful refresh looks like it did nothing. */
+  var JUST_NOW = 45;
+  function agoOf(stamp, now) {
+    var at = typeof stamp === 'number' ? stamp : Number(stamp);
+    if (!isFinite(at) || at <= 0) return '—';
+    var ref = typeof now === 'number' ? now : Date.now();
+    var secs = Math.max(0, Math.round(ref / 1000 - at));
+    if (secs < JUST_NOW) return 'just now';
+    // Round to nearest rather than floor: at 119s "2m ago" is the honest
+    // answer, and "1m ago" would understate the staleness. Each unit is then
+    // tested *after* rounding, so 3599s reads "1h ago" and never "60m ago".
+    var mins = Math.round(secs / 60);
+    if (mins < 60) return mins + 'm ago';
+    var hours = Math.round(secs / 3600);
+    if (hours < 24) return hours + 'h ago';
+    return Math.round(secs / (24 * 3600)) + 'd ago';
+  }
+
   function isRecent(mtime, now) {
     var d = dateOf(mtime);
     if (!d) return false;
@@ -486,6 +510,7 @@
     dayKeyOf: dayKeyOf,
     dayLabelOf: dayLabelOf,
     stampOf: stampOf,
+    agoOf: agoOf,
     isRecent: isRecent,
     folderKeyOf: folderKeyOf,
     folderLabelOf: folderLabelOf,

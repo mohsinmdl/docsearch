@@ -43,6 +43,7 @@ HOME = os.path.expanduser("~")
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 INDEX = os.path.join(BASE_DIR, "index.html")
 SCRIPT = os.path.join(BASE_DIR, "docsearch.js")
+MERMAID = os.path.join(BASE_DIR, "mermaid.min.js")
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
 
 SCAN_TTL = 45  # seconds a scanned corpus is served before a refresh is kicked off
@@ -402,6 +403,8 @@ _text_cache = {}   # path -> ((mtime, size), lowercased body text)
 _md_cache = {}     # .md path -> ((mtime, size), runbook meta, or None = not a runbook)
 _rules = None      # current Rules snapshot (set by load_settings/apply)
 _rules_gen = 0     # bumped on every rules swap; stale scans check it
+_scan_serial = 0   # tickets handed out to scans, in start order
+_scan_landed = 0   # highest ticket that has committed; older ones lose
 
 
 def load_settings():
@@ -541,11 +544,20 @@ def scan_corpus(rules):
 
 def _rescan():
     """Walk outside the lock, swap the result in under it — unless the rules
-    changed mid-walk, in which case this result describes a corpus nobody
-    asked for anymore and is discarded."""
-    global _corpus, _scanned_at, _scan_stamp, _scanning
+    changed mid-walk, or a scan that started later already landed. Either way
+    this result describes a corpus nobody asked for anymore and is discarded.
+
+    The ticket is what makes a forced rescan (`?fresh=1`) trustworthy: a
+    background walk that started before the user's new file existed can easily
+    finish after ours, and without an ordering it would overwrite the fresh
+    corpus *and* stamp `_scanned_at` late enough to suppress rescans for
+    another TTL — reinstating the exact staleness the force was meant to end.
+    """
+    global _corpus, _scanned_at, _scan_stamp, _scanning, _scan_serial, _scan_landed
     with _lock:
         rules, gen = _rules, _rules_gen
+        _scan_serial += 1
+        ticket = _scan_serial
     try:
         docs, unreadable = scan_corpus(rules)
     except Exception as exc:  # never leave _scanning stuck on
@@ -559,6 +571,11 @@ def _rescan():
             _scanning = False
             sys.stderr.write("scan: discarded (settings changed mid-walk)\n")
             return
+        if ticket < _scan_landed:
+            _scanning = False
+            sys.stderr.write("scan: discarded (a later scan already landed)\n")
+            return
+        _scan_landed = ticket
         _corpus = docs
         _scanned_at = now
         _scan_stamp = int(now)
@@ -578,16 +595,23 @@ def _rescan():
 
 
 def get_corpus():
-    """Corpus + last-scan stamp, refreshed in the background when stale.
+    """Corpus, last-scan stamp, and whether a walk is in flight behind it.
 
     Stale-while-revalidate: once there is a corpus to serve, a stale one goes
     out immediately and the ~2s walk runs on a worker thread, so no request
     ever waits on it. Only a cold start scans inline, and startup does that
     before the server accepts connections.
+
+    That has a cost the page has to know about: the response that *notices*
+    the staleness is still the old corpus, so a file added since the last scan
+    surfaces only on the request after this one. The third return value says
+    "there is fresher data coming", which is what lets the page quietly
+    re-fetch instead of leaving a stale list on screen until someone reloads.
     """
     global _scanning
     with _lock:
         cold = not _corpus and not _scanned_at
+        busy = _scanning  # someone else's walk, already running
         mine = (time.time() - _scanned_at) >= SCAN_TTL and not _scanning
         if mine:
             _scanning = True
@@ -597,9 +621,9 @@ def get_corpus():
         if cold:
             _rescan()  # nothing to serve yet — take the hit
             with _lock:
-                return _corpus, _scan_stamp
+                return _corpus, _scan_stamp, False
         threading.Thread(target=_rescan, daemon=True).start()
-    return corpus, stamp
+    return corpus, stamp, mine or busy
 
 
 def text_of(doc):
@@ -626,18 +650,25 @@ def text_of(doc):
     return body
 
 
-def run_search(query):
-    """Docs matching every word of `query`, newest first, plus the scan stamp.
+def run_search(query, fresh=False):
+    """Docs matching every word of `query`, newest first, plus the scan stamp
+    and whether a background walk is still running.
 
     Matching is case-insensitive substring against the home-relative path and
     the body text. Substring rather than whole-word because half these
     runbooks are named for build tags like "cc18"; `rel` rather than the
     absolute path so "Users" or the username don't match everything.
+
+    `fresh` is the page's Re-sync: walk first, synchronously, and answer only
+    once the new corpus is really in place. It also resets the TTL, so the
+    searches right after one are served straight from the fresh cache.
     """
-    corpus, stamp = get_corpus()
+    if fresh:
+        _rescan()
+    corpus, stamp, scanning = get_corpus()
     words = query.lower().split()
     if not words:
-        return [wire(d) for d in corpus], stamp
+        return [wire(d) for d in corpus], stamp, scanning
     hits = []
     for d in corpus:
         rel = d["rel"].lower()
@@ -648,7 +679,7 @@ def run_search(query):
             if not all(w in haystack for w in words):
                 continue
         hits.append(wire(d))
-    return hits, stamp
+    return hits, stamp, scanning
 
 
 def wire(doc):
@@ -668,6 +699,40 @@ def view_allowed(path):
     with _lock:
         rules = _rules
     return collectable(rules, os.path.realpath(path)) is not None
+
+
+# Injected before </body> (or appended) into any /view doc that carries Mermaid
+# diagram blocks. The <script src> loads the vendored library from this server,
+# so docs need only the raw `<pre class="mermaid">` blocks — no per-doc library
+# or init, which keeps them small and cheap to hand to an LLM as context.
+_MERMAID_TAG = b'class="mermaid"'
+_MERMAID_INJECT = (
+    b'\n<script src="/mermaid.min.js"></script>\n'
+    b'<script>\n'
+    b'(function(){\n'
+    b'  var t=document.documentElement.getAttribute("data-theme");\n'
+    b'  var dark=t==="dark"||(t!=="light"&&window.matchMedia&&'
+    b'window.matchMedia("(prefers-color-scheme: dark)").matches);\n'
+    b'  function go(){ if(!window.mermaid) return;\n'
+    b'    mermaid.initialize({startOnLoad:false,securityLevel:"loose",'
+    b'theme:dark?"dark":"default"});\n'
+    b'    mermaid.run({querySelector:"pre.mermaid, .mermaid"}); }\n'
+    b'  if(document.readyState==="loading")'
+    b'document.addEventListener("DOMContentLoaded",go); else go();\n'
+    b'})();\n'
+    b'</script>\n'
+)
+
+
+def _inject_mermaid(body):
+    """Add the Mermaid loader to a /view doc only if it has diagram blocks."""
+    if _MERMAID_TAG not in body:
+        return body
+    lower = body.lower()
+    idx = lower.rfind(b"</body>")
+    if idx == -1:
+        return body + _MERMAID_INJECT
+    return body[:idx] + _MERMAID_INJECT + body[idx:]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -699,12 +764,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(500, "index.html missing next to server script")
 
         elif url.path == "/search":
+            # `fresh=1` is the Re-sync link: rescan before answering. A GET
+            # with a side effect, but an idempotent one on a loopback-only
+            # server, and folding it in here reuses the whole search/repaint
+            # path rather than duplicating it behind a second endpoint.
             q = params.get("q", [""])[0].strip()
-            results, stamp = run_search(q)
+            fresh = params.get("fresh", ["0"])[0] == "1"
+            results, stamp, scanning = run_search(q, fresh=fresh)
             # The page requires a bare array, so anything worth knowing about
             # the engine goes in headers where curl -i and devtools can see it.
             self._send(200, json.dumps(results), "application/json; charset=utf-8",
-                       {"X-Docsearch-Engine": "walk", "X-Docsearch-Last-Scan": str(stamp)})
+                       {"X-Docsearch-Engine": "walk",
+                        "X-Docsearch-Last-Scan": str(stamp),
+                        "X-Docsearch-Rescanning": "1" if scanning else "0"})
 
         elif url.path == "/api/settings":
             with _lock:
@@ -733,6 +805,16 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self._send(500, "docsearch.js missing next to server script")
 
+        elif url.path == "/mermaid.min.js":
+            # Vendored Mermaid library, injected into any /view doc that has
+            # diagram blocks (see _inject_mermaid). Served from the server repo
+            # so docs stay lean and render offline once this file is present.
+            try:
+                with open(MERMAID, "rb") as f:
+                    self._send(200, f.read(), "application/javascript; charset=utf-8")
+            except OSError:
+                self._send(500, "mermaid.min.js missing next to server script")
+
         elif url.path == "/view" or url.path.startswith("/view/"):
             # Two forms. Path form (/view/Users/me/docs/x.html) is what the list
             # links to: a relative href inside the doc then resolves against the
@@ -758,7 +840,7 @@ class Handler(BaseHTTPRequestHandler):
                 # shows the raw text, which is still readable.
                 self._send(200, body, "text/markdown; charset=utf-8")
             else:
-                self._send(200, body, "text/html; charset=utf-8")
+                self._send(200, _inject_mermaid(body), "text/html; charset=utf-8")
 
         else:
             self._send(404, "not found")

@@ -465,3 +465,35 @@ test('missing or invalid metadata does not crash', function () {
   assert.deepEqual(DS.docsOf(undefined), []);
   assert.deepEqual(DS.visibleItems(undefined, allExpanded), []);
 });
+
+/* agoOf — the status row's freshness label. `now` is injected throughout so
+   these never race the clock. */
+test('agoOf: a fresh scan reads as just now', () => {
+  const now = 1_700_000_000_000;            // ms
+  const scan = now / 1000;                  // s
+  assert.equal(DS.agoOf(scan, now), 'just now');
+  // A walk takes ~2s and the repaint follows it: a successful Re-sync must
+  // still say "just now" afterwards, or it looks like nothing happened.
+  assert.equal(DS.agoOf(scan - 3, now), 'just now');
+  assert.equal(DS.agoOf(scan - 44, now), 'just now');
+});
+
+test('agoOf: buckets promote at the rounded boundary, not the raw one', () => {
+  const now = 1_700_000_000_000;
+  const ago = secs => DS.agoOf(now / 1000 - secs, now);
+  assert.equal(ago(45), '1m ago');
+  assert.equal(ago(119), '2m ago', 'rounds to nearest, so 119s is not understated as 1m');
+  assert.equal(ago(3599), '1h ago', 'not "60m ago" — the unit is chosen after rounding');
+  assert.equal(ago(3600), '1h ago');
+  assert.equal(ago(86399), '1d ago', 'not "24h ago"');
+  assert.equal(ago(3 * 86400), '3d ago');
+});
+
+test('agoOf: no scan stamp yet', () => {
+  const now = 1_700_000_000_000;
+  assert.equal(DS.agoOf(0, now), '—', 'server has never reported a scan');
+  assert.equal(DS.agoOf(undefined, now), '—');
+  assert.equal(DS.agoOf(NaN, now), '—');
+  // A stamp from the future (clock skew) clamps rather than going negative.
+  assert.equal(DS.agoOf(now / 1000 + 500, now), 'just now');
+});

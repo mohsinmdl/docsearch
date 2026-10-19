@@ -57,9 +57,13 @@ class WalkTestCase(unittest.TestCase):
         docs, _ = self.ds.scan_corpus(self.ds._rules)
         return docs
 
-    def search(self, query):
-        results, _ = self.ds.run_search(query)
+    def search(self, query, fresh=False):
+        results, _, _ = self.ds.run_search(query, fresh=fresh)
         return results
+
+    def scanning(self, query=""):
+        """The 'a background walk is still running' flag from a search."""
+        return self.ds.run_search(query)[2]
 
     def use_settings(self, whitelist=None, blacklist=None):
         """Apply a rules doc (raw entries — server-side detection applies)."""
@@ -227,6 +231,31 @@ class TestCaching(WalkTestCase):
                 break
             time.sleep(0.02)
         self.assertEqual(len(self.search("")), 2)
+
+    def test_forced_rescan_sees_a_file_added_inside_the_ttl(self):
+        # The Re-sync link. Without it a file copied in during the TTL is
+        # invisible: the cached corpus is served and no walk is even started.
+        self.write("docs/a.html")
+        self.assertEqual(len(self.search("")), 1)
+        self.write("docs/b.html")
+        self.assertEqual(len(self.search("")), 1, "still inside the TTL — cached corpus")
+        self.assertEqual(len(self.search("", fresh=True)), 2)
+        self.assertEqual(len(self.search("")), 2, "and that fresh corpus is now what's cached")
+
+    def test_scanning_flag_marks_a_stale_response_as_provisional(self):
+        # What the page's auto catch-up listens to: "this body is the old
+        # corpus, a newer one is one request away".
+        self.write("docs/a.html")
+        self.search("")
+        self.assertFalse(self.scanning(), "corpus is fresh — nothing in flight")
+        self.ds.SCAN_TTL = 0
+        self.assertTrue(self.scanning(), "stale response kicked off a background walk")
+        self.ds.SCAN_TTL = 45
+        for _ in range(100):
+            if not self.scanning():
+                break
+            time.sleep(0.02)
+        self.assertFalse(self.scanning(), "flag clears once that walk lands")
 
     def test_text_cache_invalidated_when_file_changes(self):
         path = self.write("docs/a.html", body="<p>original</p>")
@@ -659,6 +688,36 @@ class TestSettingsPersistence(WalkTestCase):
         worker.join(5)
         self.assertEqual(ds._corpus, [])   # stale 1-doc result was discarded
 
+    def test_a_late_finishing_scan_does_not_overwrite_a_newer_one(self):
+        # The Re-sync race: a background walk that started before the new file
+        # existed can finish after the forced walk. Without the start-order
+        # ticket it would overwrite the fresh corpus *and* reset _scanned_at,
+        # resurrecting for another TTL exactly the staleness Re-sync exists to
+        # end. No rules change here — the ordering alone has to catch it.
+        import threading as th
+        ds = self.ds
+        self.write("docs/a.html")
+        real_scan = ds.scan_corpus
+        started, release = th.Event(), th.Event()
+
+        def slow_scan(rules):
+            out = real_scan(rules)   # walk NOW, while only a.html exists...
+            started.set()
+            release.wait(5)          # ...but don't get to commit until later
+            return out
+
+        ds.scan_corpus = slow_scan
+        worker = th.Thread(target=ds._rescan)   # ticket 1: one doc
+        worker.start()
+        self.assertTrue(started.wait(5))
+        ds.scan_corpus = real_scan
+        self.write("docs/b.html")
+        ds._rescan()                            # ticket 2: two docs, commits
+        self.assertEqual(len(ds._corpus), 2)
+        release.set()
+        worker.join(5)
+        self.assertEqual(len(ds._corpus), 2, "the older walk's result was discarded")
+
 
 class TestSettingsHttp(WalkTestCase):
     """One live-server pass over the new endpoints; everything else is unit."""
@@ -674,14 +733,38 @@ class TestSettingsHttp(WalkTestCase):
         self.addCleanup(self.server.shutdown)
         self.port = self.server.server_address[1]
 
-    def request(self, method, path, body=None):
+    def request_full(self, method, path, body=None):
         conn = self.http.HTTPConnection("127.0.0.1", self.port, timeout=10)
         headers = {"Content-Type": "application/json"} if body else {}
         conn.request(method, path, body, headers)
         resp = conn.getresponse()
         data = resp.read()
+        out = dict(resp.getheaders())
         conn.close()
-        return resp.status, data
+        return resp.status, data, out
+
+    def request(self, method, path, body=None):
+        status, data, _ = self.request_full(method, path, body)
+        return status, data
+
+    def test_search_headers_report_index_freshness(self):
+        self.write("docs/a.html")
+        status, data, headers = self.request_full("GET", "/search?q=")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(json.loads(data)), 1)
+        self.assertEqual(headers["X-Docsearch-Rescanning"], "0")
+        self.assertGreater(int(headers["X-Docsearch-Last-Scan"]), 0)
+
+    def test_fresh_param_forces_a_rescan_over_the_wire(self):
+        self.write("docs/a.html")
+        self.request("GET", "/search?q=")
+        self.write("docs/b.html")
+        _, data = self.request("GET", "/search?q=")
+        self.assertEqual(len(json.loads(data)), 1, "inside the TTL, the cached corpus")
+        _, data, headers = self.request_full("GET", "/search?q=&fresh=1")
+        self.assertEqual(len(json.loads(data)), 2)
+        self.assertEqual(headers["X-Docsearch-Rescanning"], "0",
+                         "a forced scan is already done — nothing left to catch up on")
 
     def test_view_serves_md_runbooks_as_markdown(self):
         # text/markdown + a .md URL is what MD Pretty Viewer takes over.
