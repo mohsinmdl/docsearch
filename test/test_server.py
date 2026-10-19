@@ -854,6 +854,56 @@ class TestLocate(WalkTestCase):
             self.ds.locate("plan.html", "big", 1)
 
 
+
+class TestFolderAllMarkdown(WalkTestCase):
+    """A folder rule with "md": "all" (what a dropped folder gets) lists every
+    .md under it, runbook frontmatter or not."""
+
+    def rule(self, folder, **extra):
+        return dict({"type": "path", "value": os.path.join(self.home, folder)}, **extra)
+
+    def test_all_md_folder_lists_plain_markdown_recursively(self):
+        self.write("notes/README.md", body="# Read me\n")
+        self.write("notes/sub/idea.md", body="no heading\n")
+        self.write("notes/rb.md", body=MD_RUNBOOK)
+        self.write("other/README.md", body="# elsewhere\n")
+        self.use_settings(whitelist=["docs", self.rule("notes", md="all")])
+        docs = self.scan()
+        self.assertEqual(self.rels(docs), ["notes/README.md", "notes/rb.md", "notes/sub/idea.md"])
+        by = dict((d["rel"], self.ds.wire(d)) for d in docs)
+        self.assertEqual(by["notes/README.md"]["title"], "Read me")
+        self.assertNotIn("title", by["notes/sub/idea.md"])
+
+    def test_plain_folder_rule_still_needs_frontmatter(self):
+        self.write("notes/README.md", body="# Read me\n")
+        self.write("notes/rb.md", body=MD_RUNBOOK)
+        self.use_settings(whitelist=["docs", self.rule("notes")])
+        self.assertEqual(self.rels(self.scan()), ["notes/rb.md"])
+
+    def test_blacklist_beats_all_md(self):
+        self.write("notes/hidden-stuff/secret.md", body="# s\n")
+        self.write("notes/ok.md", body="# ok\n")
+        self.use_settings(whitelist=["docs", self.rule("notes", md="all")], blacklist=["hidden-stuff"])
+        self.assertEqual(self.rels(self.scan()), ["notes/ok.md"])
+
+    def test_flag_survives_normalization_only_on_folder_paths(self):
+        doc, _ = self.ds.normalize_settings({"whitelist": [
+            self.rule("notes", md="all"),
+            dict(self.rule("notes/a.md"), md="all"),
+            {"value": "docs", "md": "all"},
+            dict(self.rule("other"), md="yes"),
+        ], "blacklist": []})
+        self.assertEqual([r.get("md") for r in doc["whitelist"]], ["all", None, None, None])
+
+    def test_drop_dialog_sees_a_plain_md_under_an_all_md_folder_as_indexed(self):
+        a = self.write("notes/README.md", body="# Read me\n")
+        self.use_settings(whitelist=["docs", self.rule("notes", md="all")])
+        self.ds._spotlight_named = lambda name: [a]
+        st = os.stat(a)
+        m = self.ds.locate("README.md", st.st_size, int(st.st_mtime * 1000))["matches"][0]
+        self.assertTrue(m["indexed"])
+        self.assertFalse(m["runbook"])
+
 class TestSettingsHttp(WalkTestCase):
     """One live-server pass over the new endpoints; everything else is unit."""
 

@@ -197,6 +197,9 @@ try {
   .set-row:last-child { border-bottom:none; }
   .set-val { flex:1; min-width:0; font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:12px; color:var(--text-sub); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .set-row .chip { font-size:10px; padding:2px 6px; }
+  .set-md { font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer; user-select:none; flex-shrink:0; color:var(--text-dim); border:1px solid var(--line); }
+  .set-md:hover { color:var(--text); border-color:var(--field-border-focus); }
+  .set-md.on { color:var(--chip-blue-fg); background:var(--chip-blue-bg); border-color:transparent; }
   .set-x { font-size:13px; color:var(--text-dim); cursor:pointer; padding:0 4px; flex-shrink:0; user-select:none; }
   .set-x:hover { color:var(--text); }
   .set-empty { font-size:12px; color:var(--text-dim); padding:10px 0; }
@@ -504,7 +507,7 @@ try {
   var activeTab = 'whitelist';
   var setBusy = false;
   var SET_DESC = {
-    whitelist: 'What gets indexed: a folder name (docs), a full path (~/Documents/Codex), or an exact filename (report.html, plan.md). A .md file is listed only when its frontmatter says runbook: true, unless a rule names its full path.',
+    whitelist: 'What gets indexed: a folder name (docs), a full path (~/Documents/Codex), or an exact filename (report.html, plan.md). A .md file is listed only when its frontmatter says runbook: true, unless a rule names its full path or its folder rule is set to all .md.',
     blacklist: 'Never indexed, even when whitelisted: folder names, paths, or exact filenames. Blacklist wins.'
   };
 
@@ -563,11 +566,22 @@ try {
       var val = document.createElement('span'); val.className = 'set-val';
       val.textContent = rule.value;
       val.title = rule.value;
+      if (activeTab === 'whitelist' && rule.type === 'path' && !/\.(html|md)$/i.test(rule.value)) {
+        var mdt = document.createElement('a');
+        mdt.className = 'set-md' + (rule.md === 'all' ? ' on' : '');
+        mdt.textContent = rule.md === 'all' ? 'all .md' : 'runbook .md';
+        mdt.title = rule.md === 'all'
+          ? 'Every .md in this folder is listed. Click to list only runbooks (runbook: true).'
+          : 'Only .md files with runbook: true are listed. Click to list every .md in this folder.';
+        mdt.addEventListener('click', function () { toggleMdAll(idx); });
+      }
       var x = document.createElement('a'); x.className = 'set-x';
       x.textContent = '×';
       x.title = 'Remove this rule';
       x.addEventListener('click', function () { removeRule(idx); });
-      row.appendChild(chip); row.appendChild(val); row.appendChild(x);
+      row.appendChild(chip); row.appendChild(val);
+      if (mdt) row.appendChild(mdt);
+      row.appendChild(x);
       setListEl.appendChild(row);
     });
   }
@@ -625,6 +639,14 @@ try {
     if (!raw || !settings || setBusy) return;
     var doc = cloneSettings();
     doc[activeTab] = doc[activeTab].concat([{ value: raw }]); // server detects the type
+    postSettings(doc);
+  }
+  function toggleMdAll(idx) {
+    if (!settings || setBusy) return;
+    var doc = cloneSettings();
+    var rule = Object.assign({}, doc.whitelist[idx]);
+    if (rule.md === 'all') delete rule.md; else rule.md = 'all';
+    doc.whitelist = doc.whitelist.slice(0, idx).concat([rule], doc.whitelist.slice(idx + 1));
     postSettings(doc);
   }
   function removeRule(idx) {
@@ -786,9 +808,9 @@ try {
       }
       if (m.indexed) nodes.push(el('div', 'set-msg', 'Already indexed — it’s in the list.'));
       if (m.blacklisted) nodes.push(el('div', 'set-msg', 'A blacklist rule excludes this file, and the blacklist wins, so whitelisting it won’t make it show up.'));
-      if (m.runbook === false && !m.indexed) nodes.push(el('div', 'set-msg', 'Not a runbook (no runbook: true frontmatter). Whitelist this file lists it anyway; a folder rule only picks up runbook .md files.'));
+      if (m.runbook === false && !m.indexed) nodes.push(el('div', 'set-msg', 'Not a runbook (no runbook: true frontmatter). Either choice lists it anyway; whitelisting the folder lists every .md in it.'));
       var buttons = [dropBtn(m.indexed && !m.folder_ok ? 'Close' : 'Cancel', closeDrop)];
-      if (m.folder_ok) buttons.push(dropBtn('Whitelist folder', function () { addWhitelistPath(m.folder, m.folder_label, { path: m.path, folder: m.folder }); }));
+      if (m.folder_ok) buttons.push(dropBtn('Whitelist folder', function () { addWhitelistPath(m.folder, m.folder_label, { path: m.path, folder: m.folder }, true); }));
       if (m.indexed) buttons.push(dropBtn('Show in list', function () { closeDrop(); revealPath(m.path); }, true));
       if (!m.indexed) buttons.push(dropBtn('Whitelist this file', function () { addWhitelistPath(m.path, m.label, { path: m.path }); }, true));
       openDrop(nodes, buttons);
@@ -796,7 +818,10 @@ try {
     render();
   }
 
-  function addWhitelistPath(value, label, reveal) {
+  /* allMd: a dropped folder lists every .md under it, runbook frontmatter or
+     not — you pointed at the folder, so its notes count. An existing rule
+     for the same folder is upgraded rather than duplicated. */
+  function addWhitelistPath(value, label, reveal, allMd) {
     if (dropBusy) return;
     dropBusy = true;
     var buttons = dropActsEl.querySelectorAll('button');
@@ -806,7 +831,9 @@ try {
     fetch('/api/settings')
       .then(function (r) { if (!r.ok) throw new Error('could not load rules (' + r.status + ')'); return r.json(); })
       .then(function (doc) {
-        doc.whitelist = doc.whitelist.concat([{ type: 'path', value: value }]);
+        var same = doc.whitelist.filter(function (rule) { return rule.type === 'path' && rule.value === value; })[0];
+        if (same) { if (allMd) same.md = 'all'; }
+        else doc.whitelist = doc.whitelist.concat([allMd ? { type: 'path', value: value, md: 'all' } : { type: 'path', value: value }]);
         return fetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

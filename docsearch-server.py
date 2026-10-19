@@ -78,6 +78,10 @@ def normalize_entry(entry):
     or .md suffix makes it a single-file rule); ends in .html/.md -> filename
     (exact basename); otherwise -> folder-name (exact path segment). Raises
     ValueError on anything unusable.
+
+    A folder path rule may carry "md": "all" — every .md under it is listed,
+    runbook frontmatter or not (what a dropped folder gets). Any other "md"
+    value, or the key on another rule type, is dropped.
     """
     if isinstance(entry, dict):
         raw, typ = entry.get("value", ""), entry.get("type") or None
@@ -116,7 +120,11 @@ def normalize_entry(entry):
             raise ValueError("a folder-name rule is a single name, not a path: %s" % raw)
     else:
         raise ValueError("unknown rule type: %s" % typ)
-    return {"type": typ, "value": value}
+    out = {"type": typ, "value": value}
+    if (isinstance(entry, dict) and entry.get("md") == "all" and typ == "path"
+            and not value.lower().endswith(DOC_EXTS)):
+        out["md"] = "all"
+    return out
 
 
 def normalize_settings(doc):
@@ -151,6 +159,9 @@ class Rules(object):
     def __init__(self, doc):
         self.doc = doc
         self.wl_names, self.wl_files, self.wl_roots, self.wl_file_roots = self._side(doc["whitelist"])
+        # folder path rules whose every .md is listed, runbook or not
+        self.wl_md_roots = [os.path.realpath(r["value"]) for r in doc["whitelist"]
+                            if r["type"] == "path" and r.get("md") == "all"]
         self.bl_names, self.bl_files, self.bl_roots, self.bl_file_roots = self._side(doc["blacklist"])
 
     @staticmethod
@@ -401,6 +412,7 @@ _scan_stamp = 0    # same, as int, for the X-Docsearch-Last-Scan header
 _scanning = False  # a scan is in flight; don't start a second one
 _text_cache = {}   # path -> ((mtime, size), lowercased body text)
 _md_cache = {}     # .md path -> ((mtime, size), runbook meta, or None = not a runbook)
+_md_plain_cache = {}  # .md path -> ((mtime, size), title meta) for listed non-runbooks
 _rules = None      # current Rules snapshot (set by load_settings/apply)
 _rules_gen = 0     # bumped on every rules swap; stale scans check it
 _force_lock = threading.Lock()  # Re-sync walks run one at a time
@@ -472,25 +484,38 @@ def md_meta_of(path, st):
     return meta
 
 
-def md_plain_meta_of(path):
-    """Meta for a .md that isn't a runbook but was whitelisted by its exact
-    path: just its first H1 as the title ({} when it has none)."""
+def md_plain_meta_of(path, st=None):
+    """Meta for a .md that isn't a runbook but is listed anyway (named by a
+    rule, or under an "md": "all" folder): just its first H1 as the title
+    ({} when it has none). Cached like md_meta_of, since a folder of notes
+    would otherwise be re-read on every scan."""
+    key = (int(st.st_mtime), st.st_size) if st is not None else None
+    with _lock:
+        hit = _md_plain_cache.get(path)
+    if key is not None and hit and hit[0] == key:
+        return hit[1]
+    meta = {}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             body = md_body(f.read(MD_HEAD_BYTES))
     except OSError:
-        return {}
+        return meta
     for line in body.splitlines():
         if line.startswith("# "):
             title = _plain(line)
-            return {"title": title} if title else {}
-    return {}
+            meta = {"title": title} if title else {}
+            break
+    if key is not None:
+        with _lock:
+            _md_plain_cache[path] = (key, meta)
+    return meta
 
 
 def collectable(rules, real):
     """rules.allowed() plus the content test it can't make: a .md file is in
-    only if it is a runbook — or if a rule names that exact file, since then
-    the user asked for it by name. Returns (stat, md meta) or None."""
+    only if it is a runbook — or if a rule names that exact file, or a folder
+    rule with "md": "all" covers it, since then the user asked for it.
+    Returns (stat, md meta) or None."""
     if not rules.allowed(real):
         return None
     try:
@@ -500,8 +525,9 @@ def collectable(rules, real):
     if not real.lower().endswith(".md"):
         return st, None
     meta = md_meta_of(real, st)
-    if meta is None and real in rules.wl_file_roots:
-        meta = md_plain_meta_of(real)
+    if meta is None and (real in rules.wl_file_roots
+                         or any(real.startswith(root + os.sep) for root in rules.wl_md_roots)):
+        meta = md_plain_meta_of(real, st)
     return (st, meta) if meta is not None else None
 
 
@@ -556,6 +582,8 @@ def scan_corpus(rules):
             collect(path)
 
     with _lock:  # forget .md files that are gone, runbook or not
+        for gone in [p for p in _md_plain_cache if p not in md_seen]:
+            del _md_plain_cache[gone]
         for gone in [p for p in _md_cache if p not in md_seen]:
             del _md_cache[gone]
     docs = sorted(found.values(), key=lambda d: d["mtime"], reverse=True)
@@ -875,7 +903,7 @@ def _inject_mermaid(body):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "docsearch/2.5.0"
+    server_version = "docsearch/2.6.0"
 
     def _send(self, code, body, ctype="text/plain; charset=utf-8", headers=None):
         if isinstance(body, str):
