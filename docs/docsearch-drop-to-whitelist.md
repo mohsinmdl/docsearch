@@ -8,7 +8,7 @@ runbook: true
 > **Purpose:** Plan of record for letting the user drop one `.html` or `.md` file onto the page and whitelist that file, or its whole parent folder. \
 > **Scope:** In: a guarded Spotlight lookup endpoint, the drag overlay and whitelist dialog, server unit tests, a headless Chrome drop test, the v2.3.0 release and service restart. Out: folder drops, multi-file drops, other file types. \
 > **Created:** 2026-10-19 \
-> **Updated:** 2026-10-19 — created from the approved plan; execution started. 2026-10-19 — item 1 done. 2026-10-19 — items 2–5 done; v2.3.0 released and live; guard, lookup and test details corrected.
+> **Updated:** 2026-10-19 — created from the approved plan; execution started. 2026-10-19 — item 1 done. 2026-10-19 — items 2–5 done; v2.3.0 released and live; guard, lookup and test details corrected. 2026-10-19 — v2.3.1 adds a loopback-only Host check.
 
 [HIGH] could lose data or leave the service down with no quick undo (none in this plan) · [MED] changes server code, page code or the running service; undo is a revert plus a restart · [LOW] read-only checks or test-only code
 
@@ -242,6 +242,8 @@ curl -sI http://localhost:8377/ | grep -i '^server:'   # expect: docsearch/2.3.0
 
 *Note: the tag is annotated but not signed, like the repo's other release tags.*
 
+*Note: 2026-10-19 — a security review flagged DNS rebinding, which the JSON-only rule can't stop. v2.3.1 (`6f61691`) answers only Host `127.0.0.1`/`localhost`/`[::1]`; live check: a foreign Host gets 403, loopback gets 200.*
+
 ## Drop flow
 
 ```
@@ -301,6 +303,7 @@ Finder ──drag──▶ index.html  (overlay: "Drop to add to the whitelist")
 | The old build is needed right now | `git checkout v2.2.1`, then restart the service |
 | Restart the service (after either undo) | `launchctl kickstart -k gui/$(id -u)/com.mohsin.docsearch` |
 | Unwanted rules were added through the feature | Remove them in the Search rules dialog; they are ordinary `settings.json` entries |
+| The Host check blocks a legitimate client | Point it at `127.0.0.1` or `localhost`, or `git checkout v2.3.0` and restart |
 | The published v2.3.0 release is bad | Ship the revert as v2.3.1 with its own tag and release |
 
 ## How to use this doc
