@@ -718,6 +718,110 @@ def view_allowed(path):
     return collectable(rules, os.path.realpath(path)) is not None
 
 
+# ── Drop to whitelist ──────────────────────────────────────────────────────
+# A file dragged from Finder into the page arrives with its name, size and
+# lastModified but never its path — browsers withhold that on purpose. The
+# page sends those three, and locate() finds the file they describe.
+# Spotlight answers first; a bounded walk backs it up, because this Mac's
+# Spotlight has gone read-only before (see the module docstring) and new files
+# can lag behind its index even when it's healthy.
+
+LOCATE_PRUNE = {"Library", "node_modules", "site-packages", "venv"}
+LOCATE_WALK_BUDGET = 8.0  # seconds; the corpus walk takes ~2
+
+
+def _spotlight_named(name):
+    """Paths under HOME named exactly `name`, per Spotlight. `-name` takes the
+    name as a plain argument, so there's no query syntax to escape; it
+    matches substrings, hence the basename check. [] on any failure."""
+    try:
+        out = subprocess.run(["mdfind", "-onlyin", HOME, "-name", name],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (subprocess.SubprocessError, OSError):
+        return []
+    return [p for p in out.splitlines() if os.path.basename(p) == name]
+
+
+def _walk_named(name, budget=LOCATE_WALK_BUDGET):
+    """Spotlight's backup: walk HOME for the name, skipping hidden and vendor
+    folders, and stop at the time budget with whatever was found."""
+    deadline = time.time() + budget
+    hits = []
+    for root, dirs, files in os.walk(HOME):
+        if time.time() > deadline:
+            break
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in LOCATE_PRUNE]
+        if name in files:
+            hits.append(os.path.join(root, name))
+    return hits
+
+
+def _home_label(path):
+    return "~" + path[len(HOME):] if path == HOME or path.startswith(HOME + os.sep) else path
+
+
+def describe_drop(rules, real):
+    """What the drop dialog needs to know about one candidate file."""
+    folder = os.path.dirname(real)
+
+    def admits(value):
+        # Would a path rule for `value` let this file in? Compiling the rules
+        # with it added answers that with the real precedence (blacklist wins).
+        doc = dict(rules.doc, whitelist=rules.doc["whitelist"] + [{"type": "path", "value": value}])
+        return Rules(doc).allowed(real)
+
+    runbook = None
+    if real.lower().endswith(".md"):
+        try:
+            with open(real, "r", encoding="utf-8", errors="replace") as f:
+                runbook = md_is_runbook(f.read(MD_HEAD_BYTES))
+        except OSError:
+            runbook = False
+    return {
+        "path": real,
+        "label": _home_label(real),
+        "folder": folder,
+        "folder_label": _home_label(folder),
+        # A rule for the whole home folder (or /) would index everything.
+        "folder_ok": folder not in (HOME, os.sep),
+        "indexed": rules.allowed(real) and runbook is not False,
+        "blacklisted": not admits(real),
+        "runbook": runbook,
+    }
+
+
+def locate(name, size, mtime_ms):
+    """Files under HOME matching a dropped file's name, size and lastModified.
+    Raises ValueError for anything that isn't a single .html/.md name."""
+    if (not isinstance(name, str) or not name or "/" in name or name.startswith(".")
+            or not name.lower().endswith(DOC_EXTS)):
+        raise ValueError("only a single .html or .md file can be dropped")
+    if not isinstance(size, int) or not isinstance(mtime_ms, (int, float)):
+        raise ValueError("size and mtime are required")
+
+    def same_file(paths):
+        out = []
+        for p in paths:
+            real = os.path.realpath(p)
+            try:
+                st = os.stat(real)
+            except OSError:
+                continue
+            # lastModified is the mtime in ms; allow a second for filesystems
+            # that store coarser times.
+            if (st.st_size == size and abs(st.st_mtime * 1000 - mtime_ms) < 1000
+                    and real not in out):
+                out.append(real)
+        return out
+
+    source, found = "spotlight", same_file(_spotlight_named(name))
+    if not found:
+        source, found = "walk", same_file(_walk_named(name))
+    with _lock:
+        rules = _rules
+    return {"source": source, "matches": [describe_drop(rules, p) for p in found[:5]]}
+
+
 # Injected before </body> (or appended) into any /view doc that carries Mermaid
 # diagram blocks. The <script src> loads the vendored library from this server,
 # so docs need only the raw `<pre class="mermaid">` blocks — no per-doc library
@@ -753,7 +857,7 @@ def _inject_mermaid(body):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "docsearch/2.2.1"
+    server_version = "docsearch/2.3.0"
 
     def _send(self, code, body, ctype="text/plain; charset=utf-8", headers=None):
         if isinstance(body, str):
@@ -868,8 +972,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         url = urlparse(self.path)
-        if url.path != "/api/settings":
+        if url.path not in ("/api/settings", "/api/locate"):
             self._send(404, "not found")
+            return
+        # JSON only: another site can POST a form or text/plain to a loopback
+        # URL, but an application/json body needs a CORS preflight this
+        # server never grants — so only the page itself can reach these.
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            self._send_json(415, {"ok": False, "error": "Content-Type must be application/json"})
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
@@ -877,6 +987,16 @@ class Handler(BaseHTTPRequestHandler):
             length = 0
         if not 0 < length <= 65536:
             self._send_json(400, {"ok": False, "error": "body required (max 64KB)"})
+            return
+        if url.path == "/api/locate":
+            try:
+                req = json.loads(self.rfile.read(length))
+                found = locate(req.get("name"), req.get("size"), req.get("mtime"))
+            except (ValueError, UnicodeDecodeError, AttributeError) as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+            found["ok"] = True
+            self._send_json(200, found)
             return
         try:
             doc, warnings = normalize_settings(json.loads(self.rfile.read(length)))

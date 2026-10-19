@@ -719,6 +719,113 @@ class TestSettingsPersistence(WalkTestCase):
         self.assertEqual(len(ds._corpus), 2, "the older walk's result was discarded")
 
 
+class TestLocate(WalkTestCase):
+    """Drop to whitelist: finding a dropped file from its name, size and
+    lastModified (the browser never sends the path)."""
+
+    def setUp(self):
+        super().setUp()
+        self.spotlight = []   # what the stubbed mdfind "returns"
+        self.ds._spotlight_named = lambda name: [p for p in self.spotlight
+                                                 if os.path.basename(p) == name]
+
+    def drop(self, path, size=None, mtime_ms=None):
+        st = os.stat(path)
+        return self.ds.locate(os.path.basename(path),
+                              st.st_size if size is None else size,
+                              int(st.st_mtime * 1000) if mtime_ms is None else mtime_ms)
+
+    def test_spotlight_hit_is_narrowed_by_size_and_mtime(self):
+        a = self.write("notes/plan.html", mtime=1_700_000_000)
+        b = self.write("other/plan.html", body="<html>different length</html>", mtime=1_700_000_000)
+        self.spotlight = [a, b]
+        got = self.drop(a)
+        self.assertEqual(got["source"], "spotlight")
+        self.assertEqual([m["path"] for m in got["matches"]], [a])
+
+    def test_walk_backs_up_an_empty_spotlight(self):
+        a = self.write("notes/deep/plan.html")
+        got = self.drop(a)
+        self.assertEqual(got["source"], "walk")
+        self.assertEqual([m["path"] for m in got["matches"]], [a])
+
+    def test_walk_backs_up_a_stale_spotlight_hit(self):
+        # Spotlight knows the name but the size/mtime don't match (a copy, or
+        # an index that lags edits); the walk still finds the real file.
+        a = self.write("notes/plan.html", mtime=1_700_000_000)
+        old = self.write("old/plan.html", body="<html>older, longer copy</html>")
+        self.spotlight = [old]
+        got = self.drop(a)
+        self.assertEqual(got["source"], "walk")
+        self.assertEqual([m["path"] for m in got["matches"]], [a])
+
+    def test_walk_skips_hidden_and_vendor_folders(self):
+        self.write(".cache/plan.html", mtime=1_700_000_000)
+        hidden = os.path.join(self.home, ".cache/plan.html")
+        self.assertEqual(self.drop(hidden)["matches"], [])
+
+    def test_identical_copies_all_come_back(self):
+        a = self.write("one/plan.html", mtime=1_700_000_000)
+        b = self.write("two/plan.html", mtime=1_700_000_000)
+        self.spotlight = [a, b]
+        self.assertEqual(sorted(m["path"] for m in self.drop(a)["matches"]), [a, b])
+
+    def test_nothing_found(self):
+        a = self.write("notes/plan.html")
+        self.assertEqual(self.drop(a, size=999999)["matches"], [])
+
+    def test_flags_for_a_file_outside_the_whitelist(self):
+        a = self.write("notes/plan.html")
+        self.spotlight = [a]
+        m = self.drop(a)["matches"][0]
+        self.assertFalse(m["indexed"])
+        self.assertFalse(m["blacklisted"])
+        self.assertIsNone(m["runbook"])
+        self.assertEqual(m["label"], "~/notes/plan.html")
+        self.assertEqual(m["folder"], os.path.join(self.home, "notes"))
+        self.assertEqual(m["folder_label"], "~/notes")
+        self.assertTrue(m["folder_ok"])
+
+    def test_flags_for_an_already_indexed_file(self):
+        a = self.write("docs/plan.html")
+        self.spotlight = [a]
+        self.assertTrue(self.drop(a)["matches"][0]["indexed"])
+
+    def test_flags_for_a_blacklisted_file(self):
+        self.use_settings(whitelist=["docs"], blacklist=["archive"])
+        a = self.write("archive/plan.html")
+        self.spotlight = [a]
+        m = self.drop(a)["matches"][0]
+        self.assertTrue(m["blacklisted"])
+        self.assertFalse(m["indexed"])
+
+    def test_flags_for_markdown(self):
+        rb = self.write("notes/rb.md", body=MD_RUNBOOK)
+        plain = self.write("notes/README.md", body="# just notes\n")
+        self.spotlight = [rb, plain]
+        self.assertTrue(self.drop(rb)["matches"][0]["runbook"])
+        m = self.drop(plain)["matches"][0]
+        self.assertFalse(m["runbook"])
+        self.assertFalse(m["indexed"])
+
+    def test_no_folder_rule_for_the_home_folder_itself(self):
+        a = self.write("plan.html")
+        self.spotlight = [a]
+        self.assertFalse(self.drop(a)["matches"][0]["folder_ok"])
+
+    def test_a_dropped_file_rule_indexes_it(self):
+        a = self.write("notes/plan.html")
+        self.use_settings(whitelist=["docs", a])
+        self.assertEqual(self.rels(self.scan()), ["notes/plan.html"])
+
+    def test_rejects_anything_but_one_doc_name(self):
+        for name in ("", "a/b.html", ".hidden.html", "notes.txt", None):
+            with self.assertRaises(ValueError):
+                self.ds.locate(name, 1, 1)
+        with self.assertRaises(ValueError):
+            self.ds.locate("plan.html", "big", 1)
+
+
 class TestSettingsHttp(WalkTestCase):
     """One live-server pass over the new endpoints; everything else is unit."""
 
@@ -849,7 +956,31 @@ class TestSettingsHttp(WalkTestCase):
         self.assertFalse(os.path.exists(self.ds.SETTINGS_PATH))
 
     def test_post_empty_body_rejected(self):
-        status, _ = self.request("POST", "/api/settings")
+        status, _, _ = self.request_full("POST", "/api/settings",
+                                         extra={"Content-Type": "application/json"})
+        self.assertEqual(status, 400)
+
+    def test_posts_need_a_json_content_type(self):
+        # A cross-site form can POST text/plain to a loopback URL without a
+        # preflight; application/json can't, so it's the only type accepted.
+        body = json.dumps({"whitelist": [{"value": "docs"}, {"value": "~/x"}], "blacklist": []})
+        for path in ("/api/settings", "/api/locate"):
+            status, _, _ = self.request_full("POST", path, body, extra={"Content-Type": "text/plain"})
+            self.assertEqual(status, 415, path)
+        self.assertFalse(os.path.exists(self.ds.SETTINGS_PATH), "rules unchanged")
+
+    def test_locate_over_the_wire(self):
+        path = self.write("notes/plan.html")
+        st = os.stat(path)
+        self.ds._spotlight_named = lambda name: [path]
+        status, data = self.request("POST", "/api/locate", json.dumps(
+            {"name": "plan.html", "size": st.st_size, "mtime": int(st.st_mtime * 1000)}))
+        self.assertEqual(status, 200)
+        body = json.loads(data)
+        self.assertTrue(body["ok"])
+        self.assertEqual([m["path"] for m in body["matches"]], [path])
+        status, data = self.request("POST", "/api/locate", json.dumps(
+            {"name": "../../etc/passwd", "size": 1, "mtime": 1}))
         self.assertEqual(status, 400)
 
 

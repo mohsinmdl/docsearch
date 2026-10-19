@@ -197,6 +197,22 @@ try {
   .set-x:hover { color:var(--text); }
   .set-empty { font-size:12px; color:var(--text-dim); padding:10px 0; }
 
+  /* Drop to whitelist: a full-page target while a file is dragged over the
+     page, then a modal (same shell as the others) to pick file or folder. */
+  .drop-overlay { position:fixed; inset:12px; z-index:20; display:flex; align-items:center; justify-content:center; border:2px dashed var(--field-border-focus); border-radius:12px; background:color-mix(in srgb, var(--bg) 88%, transparent); pointer-events:none; }
+  .drop-overlay span { font-size:15px; font-weight:500; color:var(--text); }
+  .drop-overlay i { display:block; font-style:normal; font-size:12px; color:var(--text-dim); margin-top:6px; text-align:center; }
+  .drop-body { font-size:12px; color:var(--text-sub); line-height:1.5; margin-top:8px; }
+  .drop-path { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:12px; color:var(--text); word-break:break-all; }
+  .drop-pick { display:flex; align-items:flex-start; gap:8px; padding:6px 0; border-bottom:1px solid var(--line-soft); cursor:pointer; }
+  .drop-pick:last-child { border-bottom:none; }
+  .drop-pick input { margin:2px 0 0; }
+  .drop-acts { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; margin-top:14px; }
+  .drop-btn { font-size:12px; font-family:inherit; color:var(--text-sub); background:var(--field-bg); border:1px solid var(--field-border); border-radius:5px; padding:5px 11px; cursor:pointer; }
+  .drop-btn:hover { color:var(--text); border-color:var(--field-border-focus); }
+  .drop-btn.primary { color:var(--chip-green-fg); background:var(--chip-green-bg); border-color:transparent; }
+  .drop-btn:disabled { opacity:0.5; cursor:default; }
+
   .hidden { display:none; }
 </style>
 </head>
@@ -239,6 +255,7 @@ try {
       <div class="sc-row"><span>Re-scan for new files <span class="k-note">(the list also catches up on its own)</span></span><span class="keys"><kbd>g</kbd><kbd>r</kbd></span></div>
       <div class="sc-sec">Settings</div>
       <div class="sc-row"><span>Search rules (whitelist / blacklist)</span><span class="keys"><kbd>g</kbd><kbd>s</kbd></span></div>
+      <div class="sc-row"><span>Whitelist a file or its folder</span><span class="keys"><span class="k-note">drag it onto the page</span></span></div>
       <div class="sc-sec">Appearance</div>
       <div class="sc-row"><span>Toggle light / dark</span><span class="keys"><kbd>⌃⇧L</kbd></span></div>
       <div class="sc-row"><span>This panel</span><span class="keys"><kbd>?</kbd></span></div>
@@ -261,6 +278,18 @@ try {
       </div>
       <div class="set-msg hidden" id="set-msg"></div>
       <div class="set-list" id="set-list"></div>
+    </div>
+  </div>
+
+  <div class="drop-overlay hidden" id="drop-overlay" aria-hidden="true">
+    <div><span>Drop to add to the whitelist</span><i>one .html or .md file</i></div>
+  </div>
+
+  <div class="modal-wrap hidden" id="drop">
+    <div class="modal wide" role="dialog" aria-label="Add to whitelist">
+      <div class="modal-title">Add to whitelist</div>
+      <div id="drop-content"></div>
+      <div class="drop-acts" id="drop-acts"></div>
     </div>
   </div>
 
@@ -602,6 +631,194 @@ try {
   setInputEl.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') { e.preventDefault(); addRule(); }
   });
+
+  // ── drop to whitelist (drag a file from Finder anywhere onto the page) ──
+  /* A dropped file carries its name, size and lastModified but never its
+     path — browsers withhold that on purpose. /api/locate finds the file
+     those three describe, and this dialog offers a path rule for the file
+     or for its folder, saved the same way the rules editor saves. */
+  var dropOverlayEl = document.getElementById('drop-overlay');
+  var dropEl = document.getElementById('drop');
+  var dropContentEl = document.getElementById('drop-content');
+  var dropActsEl = document.getElementById('drop-acts');
+  var dragDepth = 0;   // dragenter/leave fire per child element; count to know when the drag really left
+  var dropBusy = false;
+
+  function isFileDrag(e) {
+    var types = e.dataTransfer && e.dataTransfer.types;
+    return !!types && Array.prototype.indexOf.call(types, 'Files') !== -1;
+  }
+  function showDropOverlay(on) { dropOverlayEl.classList.toggle('hidden', !on); }
+
+  window.addEventListener('dragenter', function (e) {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    showDropOverlay(true);
+  });
+  window.addEventListener('dragover', function (e) {
+    if (!isFileDrag(e)) return;
+    e.preventDefault(); // without this the browser navigates to the dropped file
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  window.addEventListener('dragleave', function (e) {
+    if (!isFileDrag(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) showDropOverlay(false);
+  });
+  window.addEventListener('drop', function (e) {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    showDropOverlay(false);
+    if (!dropBusy) handleDrop(e.dataTransfer);
+  });
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+  function dropBtn(label, onClick, primary) {
+    var b = el('button', 'drop-btn' + (primary ? ' primary' : ''), label);
+    b.type = 'button';
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  function openDrop(nodes, buttons) {
+    helpEl.classList.add('hidden');
+    showSettings(false);
+    dropContentEl.textContent = '';
+    nodes.forEach(function (n) { dropContentEl.appendChild(n); });
+    dropActsEl.textContent = '';
+    buttons.forEach(function (b) { dropActsEl.appendChild(b); });
+    dropEl.classList.remove('hidden');
+    var primary = dropActsEl.querySelector('.primary') || dropActsEl.querySelector('button');
+    if (primary) primary.focus();
+  }
+  function closeDrop() {
+    if (dropBusy || dropEl.classList.contains('hidden')) return;
+    dropEl.classList.add('hidden');
+    qEl.focus();
+  }
+  dropEl.addEventListener('click', function (e) { if (e.target === dropEl) closeDrop(); });
+
+  function handleDrop(dt) {
+    var files = dt.files;
+    var item = dt.items && dt.items[0];
+    var entry = item && item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+    var f = files[0];
+    if (files.length !== 1 || (entry && entry.isDirectory) || !/\.(html|md)$/i.test(f.name)) {
+      openDrop([el('div', 'drop-body', 'Drop one .html or .md file at a time. Folders and other file types can’t be added this way.')],
+               [dropBtn('OK', closeDrop, true)]);
+      return;
+    }
+    var looking = el('div', 'drop-body', 'Looking for ');
+    looking.appendChild(el('span', 'drop-path', f.name));
+    looking.appendChild(document.createTextNode('…'));
+    openDrop([looking], [dropBtn('Cancel', closeDrop)]);
+    fetch('/api/locate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: f.name, size: f.size, mtime: f.lastModified })
+    })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.body.ok) throw new Error(res.body.error || 'lookup failed');
+        if (dropEl.classList.contains('hidden')) return; // cancelled while looking
+        showDropMatches(f.name, res.body.matches);
+      })
+      .catch(function (err) {
+        openDrop([el('div', 'drop-body', String(err.message || err))], [dropBtn('Close', closeDrop, true)]);
+      });
+  }
+
+  function showDropMatches(name, matches) {
+    if (!matches.length) {
+      var none = el('div', 'drop-body', 'Couldn’t find ');
+      none.appendChild(el('span', 'drop-path', name));
+      none.appendChild(document.createTextNode(' in your home folder — neither Spotlight nor a folder walk turned it up. Add its path by hand in Search rules.'));
+      openDrop([none], [
+        dropBtn('Cancel', closeDrop),
+        dropBtn('Open Search rules', function () {
+          closeDrop();
+          activeTab = 'whitelist';
+          showSettings(true);
+          setInputEl.value = name;
+        }, true)
+      ]);
+      return;
+    }
+    var sel = 0;
+    function render() {
+      var m = matches[sel];
+      var nodes = [];
+      if (matches.length > 1) {
+        nodes.push(el('div', 'drop-body', matches.length + ' files share this name, size and date. Pick one:'));
+        var list = el('div', 'set-list');
+        matches.forEach(function (cand, i) {
+          var row = el('label', 'drop-pick');
+          var radio = el('input');
+          radio.type = 'radio'; radio.name = 'drop-pick'; radio.checked = i === sel;
+          radio.addEventListener('change', function () { sel = i; render(); });
+          row.appendChild(radio);
+          row.appendChild(el('span', 'drop-path', cand.label));
+          list.appendChild(row);
+        });
+        nodes.push(list);
+      } else {
+        var found = el('div', 'drop-body', 'Found ');
+        found.appendChild(el('span', 'drop-path', m.label));
+        nodes.push(found);
+      }
+      if (m.indexed) nodes.push(el('div', 'set-msg', 'Already indexed — it’s in the list.'));
+      if (m.blacklisted) nodes.push(el('div', 'set-msg', 'A blacklist rule excludes this file, and the blacklist wins, so whitelisting it won’t make it show up.'));
+      if (m.runbook === false) nodes.push(el('div', 'set-msg', 'This .md has no runbook: true frontmatter, so it won’t be listed until it does.'));
+      var buttons = [dropBtn(m.indexed && !m.folder_ok ? 'Close' : 'Cancel', closeDrop)];
+      if (m.folder_ok) buttons.push(dropBtn('Whitelist folder ' + m.folder_label, function () { addWhitelistPath(m.folder, m.folder_label); }, m.indexed));
+      if (!m.indexed) buttons.push(dropBtn('Whitelist this file', function () { addWhitelistPath(m.path, m.label); }, true));
+      openDrop(nodes, buttons);
+    }
+    render();
+  }
+
+  function addWhitelistPath(value, label) {
+    if (dropBusy) return;
+    dropBusy = true;
+    var buttons = dropActsEl.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+    var status = el('div', 'set-msg', 'Adding and rescanning…');
+    dropContentEl.appendChild(status);
+    fetch('/api/settings')
+      .then(function (r) { if (!r.ok) throw new Error('could not load rules (' + r.status + ')'); return r.json(); })
+      .then(function (doc) {
+        doc.whitelist = doc.whitelist.concat([{ type: 'path', value: value }]);
+        return fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(doc)
+        });
+      })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.body.ok) throw new Error(res.body.error || 'save failed');
+        settings = res.body.settings;
+        search(qEl.value.trim(), { keepSel: true });
+        dropBusy = false;
+        var done = el('div', 'drop-body', 'Added ');
+        done.appendChild(el('span', 'drop-path', label));
+        done.appendChild(document.createTextNode(' to the whitelist.'));
+        var nodes = [done];
+        (res.body.warnings || []).forEach(function (w) { nodes.push(el('div', 'set-msg', w)); });
+        openDrop(nodes, [dropBtn('Done', closeDrop, true)]);
+      })
+      .catch(function (err) {
+        dropBusy = false;
+        status.textContent = String(err.message || err);
+        for (var j = 0; j < buttons.length; j++) buttons[j].disabled = false;
+      });
+  }
 
   /* Expand/collapse every heading at once — folder and date heads alike. */
   function setAllHeads(open) {
@@ -994,6 +1211,12 @@ try {
 
   var pendingG = 0; // timestamp of a 'g' awaiting its chord partner (gf/gd/ge/gc/gs/gr)
   window.addEventListener('keydown', function (e) {
+    /* Drop dialog: Esc closes; Tab/Enter/Space work its buttons; nothing
+       else reaches the list behind it. */
+    if (!dropEl.classList.contains('hidden')) {
+      if (e.key === 'Escape') { e.preventDefault(); closeDrop(); }
+      return;
+    }
     /* Settings modal first: Esc closes, everything else passes through
        untouched (NO preventDefault) — its text input needs real typing, and
        returning here keeps /, ⌘K, ?, g-chords and especially Enter (which
