@@ -5,9 +5,9 @@ Serves the search page (index.html, from this script's directory) at
 http://127.0.0.1:8377. The corpus is every .html file that the whitelist/
 blacklist rules admit (by default: anything inside a folder named "docs",
 minus the usual vendor folders), plus every .md file in the same places whose
-frontmatter says `runbook: true`; results are newest first, and a query
-matches when every word appears in the file's home-relative path or its
-stripped body text.
+frontmatter says `runbook: true` (or that a rule names by its exact path);
+results are newest first, and a query matches when every word appears in the
+file's home-relative path or its stripped body text.
 
 Markdown runbooks are what the runbook skill writes since its 2.0.0 (October
 2026); the user's MD Pretty Viewer Chrome extension renders them. Existing
@@ -472,9 +472,25 @@ def md_meta_of(path, st):
     return meta
 
 
+def md_plain_meta_of(path):
+    """Meta for a .md that isn't a runbook but was whitelisted by its exact
+    path: just its first H1 as the title ({} when it has none)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            body = md_body(f.read(MD_HEAD_BYTES))
+    except OSError:
+        return {}
+    for line in body.splitlines():
+        if line.startswith("# "):
+            title = _plain(line)
+            return {"title": title} if title else {}
+    return {}
+
+
 def collectable(rules, real):
     """rules.allowed() plus the content test it can't make: a .md file is in
-    only if it is a runbook. Returns (stat, md meta) or None."""
+    only if it is a runbook — or if a rule names that exact file, since then
+    the user asked for it by name. Returns (stat, md meta) or None."""
     if not rules.allowed(real):
         return None
     try:
@@ -484,6 +500,8 @@ def collectable(rules, real):
     if not real.lower().endswith(".md"):
         return st, None
     meta = md_meta_of(real, st)
+    if meta is None and real in rules.wl_file_roots:
+        meta = md_plain_meta_of(real)
     return (st, meta) if meta is not None else None
 
 
@@ -784,7 +802,7 @@ def describe_drop(rules, real):
         "folder_label": _home_label(folder),
         # A rule for the whole home folder (or /) would index everything.
         "folder_ok": folder not in (HOME, os.sep),
-        "indexed": rules.allowed(real) and runbook is not False,
+        "indexed": collectable(rules, real) is not None,
         "blacklisted": not admits(real),
         "runbook": runbook,
     }
@@ -857,7 +875,7 @@ def _inject_mermaid(body):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "docsearch/2.3.2"
+    server_version = "docsearch/2.4.0"
 
     def _send(self, code, body, ctype="text/plain; charset=utf-8", headers=None):
         if isinstance(body, str):

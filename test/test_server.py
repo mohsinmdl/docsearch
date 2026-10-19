@@ -818,6 +818,34 @@ class TestLocate(WalkTestCase):
         self.use_settings(whitelist=["docs", a])
         self.assertEqual(self.rels(self.scan()), ["notes/plan.html"])
 
+    def test_an_exact_path_rule_lists_a_plain_md(self):
+        # Dropping a non-runbook .md and choosing "Whitelist this file" must
+        # actually list it: the user named that exact file.
+        a = self.write("skills/SKILL.md", body="---\nname: x\n---\n# My skill\n\nbody\n")
+        self.use_settings(whitelist=["docs", a])
+        docs = self.scan()
+        self.assertEqual(self.rels(docs), ["skills/SKILL.md"])
+        self.assertEqual(self.ds.wire(docs[0])["kind"], "md")
+        self.assertEqual(self.ds.wire(docs[0])["title"], "My skill")
+        self.assertTrue(self.ds.view_allowed(a))
+        self.spotlight = [a]
+        self.assertTrue(self.drop(a)["matches"][0]["indexed"])
+
+    def test_folder_and_filename_rules_still_need_runbook_frontmatter(self):
+        a = self.write("skills/SKILL.md", body="# My skill\n")
+        self.use_settings(whitelist=["docs", os.path.dirname(a), "SKILL.md"])
+        self.assertEqual(self.scan(), [])
+
+    def test_blacklist_still_beats_an_exact_md_rule(self):
+        a = self.write("archive/SKILL.md", body="# My skill\n")
+        self.use_settings(whitelist=["docs", a], blacklist=["archive"])
+        self.assertEqual(self.scan(), [])
+
+    def test_plain_md_without_an_h1_falls_back_to_the_filename(self):
+        a = self.write("skills/notes.md", body="just text\n")
+        self.use_settings(whitelist=["docs", a])
+        self.assertNotIn("title", self.ds.wire(self.scan()[0]))
+
     def test_rejects_anything_but_one_doc_name(self):
         for name in ("", "a/b.html", ".hidden.html", "notes.txt", None):
             with self.assertRaises(ValueError):

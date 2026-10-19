@@ -499,7 +499,7 @@ try {
   var activeTab = 'whitelist';
   var setBusy = false;
   var SET_DESC = {
-    whitelist: 'What gets indexed: a folder name (docs), a full path (~/Documents/Codex), or an exact filename (report.html, plan.md — a .md file is listed only when its frontmatter says runbook: true).',
+    whitelist: 'What gets indexed: a folder name (docs), a full path (~/Documents/Codex), or an exact filename (report.html, plan.md). A .md file is listed only when its frontmatter says runbook: true, unless a rule names its full path.',
     blacklist: 'Never indexed, even when whitelisted: folder names, paths, or exact filenames. Blacklist wins.'
   };
 
@@ -781,7 +781,7 @@ try {
       }
       if (m.indexed) nodes.push(el('div', 'set-msg', 'Already indexed — it’s in the list.'));
       if (m.blacklisted) nodes.push(el('div', 'set-msg', 'A blacklist rule excludes this file, and the blacklist wins, so whitelisting it won’t make it show up.'));
-      if (m.runbook === false) nodes.push(el('div', 'set-msg', 'This .md has no runbook: true frontmatter, so it won’t be listed until it does.'));
+      if (m.runbook === false && !m.indexed) nodes.push(el('div', 'set-msg', 'Not a runbook (no runbook: true frontmatter). Whitelist this file lists it anyway; a folder rule only picks up runbook .md files.'));
       var buttons = [dropBtn(m.indexed && !m.folder_ok ? 'Close' : 'Cancel', closeDrop)];
       if (m.folder_ok) buttons.push(dropBtn('Whitelist folder', function () { addWhitelistPath(m.folder, m.folder_label); }, m.indexed));
       if (!m.indexed) buttons.push(dropBtn('Whitelist this file', function () { addWhitelistPath(m.path, m.label); }, true));
