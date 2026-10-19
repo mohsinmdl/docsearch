@@ -812,7 +812,12 @@ try {
       .then(function (res) {
         if (!res.ok || !res.body.ok) throw new Error(res.body.error || 'save failed');
         settings = res.body.settings;
-        search(qEl.value.trim()).then(function () { revealPath(reveal.path, reveal.folder); });
+        search(qEl.value.trim()).then(function () {
+          // A whole folder was added: show the list by folder (remembered,
+          // like the Folder toggle) so its new group is what you land in.
+          if (reveal.folder && !groupBy.folder) toggleGroup('folder');
+          revealPath(reveal.path, reveal.folder);
+        });
         dropBusy = false;
         var done = el('div', 'drop-body', 'Added ');
         done.appendChild(el('span', 'drop-path', label));
