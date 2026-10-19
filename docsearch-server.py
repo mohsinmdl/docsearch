@@ -403,6 +403,8 @@ _text_cache = {}   # path -> ((mtime, size), lowercased body text)
 _md_cache = {}     # .md path -> ((mtime, size), runbook meta, or None = not a runbook)
 _rules = None      # current Rules snapshot (set by load_settings/apply)
 _rules_gen = 0     # bumped on every rules swap; stale scans check it
+_force_lock = threading.Lock()  # Re-sync walks run one at a time
+_landed_began = 0.0  # when the walk behind the current corpus started
 _scan_serial = 0   # tickets handed out to scans, in start order
 _scan_landed = 0   # highest ticket that has committed; older ones lose
 
@@ -553,11 +555,12 @@ def _rescan():
     corpus *and* stamp `_scanned_at` late enough to suppress rescans for
     another TTL — reinstating the exact staleness the force was meant to end.
     """
-    global _corpus, _scanned_at, _scan_stamp, _scanning, _scan_serial, _scan_landed
+    global _corpus, _scanned_at, _scan_stamp, _scanning, _scan_serial, _scan_landed, _landed_began
     with _lock:
         rules, gen = _rules, _rules_gen
         _scan_serial += 1
         ticket = _scan_serial
+        began = time.time()
     try:
         docs, unreadable = scan_corpus(rules)
     except Exception as exc:  # never leave _scanning stuck on
@@ -576,6 +579,7 @@ def _rescan():
             sys.stderr.write("scan: discarded (a later scan already landed)\n")
             return
         _scan_landed = ticket
+        _landed_began = began
         _corpus = docs
         _scanned_at = now
         _scan_stamp = int(now)
@@ -592,6 +596,19 @@ def _rescan():
                            for p in unreadable))
         note = ", unreadable: %s" % ", ".join(shown[:8])
     sys.stderr.write("scan: %d docs%s\n" % (len(docs), note))
+
+
+def _forced_rescan():
+    """Re-sync's walk, serialized and coalesced. A burst of Re-syncs costs at
+    most one walk in flight plus one queued: a request that waited behind a
+    walk which *started* after it arrived already has a corpus at least as new
+    as the one it asked for, so it takes that instead of walking again."""
+    arrived = time.time()
+    with _force_lock:
+        with _lock:
+            covered = _landed_began >= arrived
+        if not covered:
+            _rescan()
 
 
 def get_corpus():
@@ -664,7 +681,7 @@ def run_search(query, fresh=False):
     searches right after one are served straight from the fresh cache.
     """
     if fresh:
-        _rescan()
+        _forced_rescan()
     corpus, stamp, scanning = get_corpus()
     words = query.lower().split()
     if not words:
@@ -736,7 +753,7 @@ def _inject_mermaid(body):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "docsearch/2.2"
+    server_version = "docsearch/2.2.1"
 
     def _send(self, code, body, ctype="text/plain; charset=utf-8", headers=None):
         if isinstance(body, str):
@@ -768,8 +785,12 @@ class Handler(BaseHTTPRequestHandler):
             # with a side effect, but an idempotent one on a loopback-only
             # server, and folding it in here reuses the whole search/repaint
             # path rather than duplicating it behind a second endpoint.
+            # It also needs the X-Docsearch-Resync header: any web page can
+            # GET a loopback URL, but a custom header forces a CORS preflight
+            # this server never grants, so other sites can't trigger walks.
             q = params.get("q", [""])[0].strip()
-            fresh = params.get("fresh", ["0"])[0] == "1"
+            fresh = (params.get("fresh", ["0"])[0] == "1"
+                     and self.headers.get("X-Docsearch-Resync") == "1")
             results, stamp, scanning = run_search(q, fresh=fresh)
             # The page requires a bare array, so anything worth knowing about
             # the engine goes in headers where curl -i and devtools can see it.

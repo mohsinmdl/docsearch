@@ -782,7 +782,8 @@ try {
     opts = opts || {};
     var seq = ++reqSeq;
     clearTimeout(catchUpTimer); // any pending catch-up is about to be moot
-    return fetch('/search?q=' + encodeURIComponent(q) + (opts.fresh ? '&fresh=1' : ''))
+    return fetch('/search?q=' + encodeURIComponent(q) + (opts.fresh ? '&fresh=1' : ''),
+                 opts.fresh ? { headers: { 'X-Docsearch-Resync': '1' } } : undefined)
       .then(function (r) {
         if (!r.ok) throw new Error(r.status);
         // Headers first: the scan stamp and the "more is coming" flag ride

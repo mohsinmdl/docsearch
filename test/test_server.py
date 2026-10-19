@@ -733,9 +733,10 @@ class TestSettingsHttp(WalkTestCase):
         self.addCleanup(self.server.shutdown)
         self.port = self.server.server_address[1]
 
-    def request_full(self, method, path, body=None):
+    def request_full(self, method, path, body=None, extra=None):
         conn = self.http.HTTPConnection("127.0.0.1", self.port, timeout=10)
         headers = {"Content-Type": "application/json"} if body else {}
+        headers.update(extra or {})
         conn.request(method, path, body, headers)
         resp = conn.getresponse()
         data = resp.read()
@@ -761,10 +762,49 @@ class TestSettingsHttp(WalkTestCase):
         self.write("docs/b.html")
         _, data = self.request("GET", "/search?q=")
         self.assertEqual(len(json.loads(data)), 1, "inside the TTL, the cached corpus")
-        _, data, headers = self.request_full("GET", "/search?q=&fresh=1")
+        _, data, headers = self.request_full("GET", "/search?q=&fresh=1",
+                                             extra={"X-Docsearch-Resync": "1"})
         self.assertEqual(len(json.loads(data)), 2)
         self.assertEqual(headers["X-Docsearch-Rescanning"], "0",
                          "a forced scan is already done — nothing left to catch up on")
+
+    def test_fresh_param_without_the_header_does_not_rescan(self):
+        # A cross-site page can GET this URL but can't add the custom header
+        # without a CORS preflight, so the bare param must be inert.
+        self.write("docs/a.html")
+        self.request("GET", "/search?q=")
+        self.write("docs/b.html")
+        _, data = self.request("GET", "/search?q=&fresh=1")
+        self.assertEqual(len(json.loads(data)), 1, "no header, no forced walk")
+
+    def test_concurrent_resyncs_coalesce_into_one_walk(self):
+        import threading as th
+        ds = self.ds
+        self.write("docs/a.html")
+        ds.run_search("")
+        walks = []
+        real = ds.scan_corpus
+        gate = th.Event()
+
+        def slow_scan(rules):
+            walks.append(1)
+            gate.wait(5)
+            return real(rules)
+        ds.scan_corpus = slow_scan
+        try:
+            first = th.Thread(target=ds._forced_rescan)
+            first.start()
+            while not walks:          # first walk is in flight
+                th.Event().wait(0.01)
+            queued = [th.Thread(target=ds._forced_rescan) for _ in range(5)]
+            for t in queued:
+                t.start()
+            gate.set()
+            for t in [first] + queued:
+                t.join(10)
+        finally:
+            ds.scan_corpus = real
+        self.assertLessEqual(len(walks), 2, "one in flight + at most one queued")
 
     def test_view_serves_md_runbooks_as_markdown(self):
         # text/markdown + a .md URL is what MD Pretty Viewer takes over.
