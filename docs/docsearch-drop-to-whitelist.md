@@ -1,14 +1,14 @@
 ---
 runbook: true
 ---
-# docsearch — drag a file onto the page to whitelist it (v2.3.0) [AWAITING USER — try a real Finder drop]
+# docsearch — drag a file onto the page to whitelist it (v2.3.0) [DONE]
 
 > **Related:** `docs/spotlight-to-walk-migration.html` · GitHub `mohsinmdl/docsearch` (current release v2.2.1) \
 > **Context:** docsearch is a local Python server on `http://localhost:8377` plus `index.html` that lists and searches the user's runbooks. Today whitelist rules (folder name such as `docs`, full path such as `~/Documents/Codex`, or exact filename) are added only by typing them into the Search rules dialog. \
 > **Purpose:** Plan of record for letting the user drop one `.html` or `.md` file onto the page and whitelist that file, or its whole parent folder. \
 > **Scope:** In: a guarded Spotlight lookup endpoint, the drag overlay and whitelist dialog, server unit tests, a headless Chrome drop test, the v2.3.0 release and service restart. Out: folder drops, multi-file drops, other file types. \
 > **Created:** 2026-10-19 \
-> **Updated:** 2026-10-19 — created from the approved plan; execution started. 2026-10-19 — item 1 done. 2026-10-19 — items 2–5 done; v2.3.0 released and live; guard, lookup and test details corrected. 2026-10-19 — v2.3.1 adds a loopback-only Host check.
+> **Updated:** 2026-10-19 — created from the approved plan; execution started. 2026-10-19 — item 1 done. 2026-10-19 — items 2–5 done; v2.3.0 released and live; guard, lookup and test details corrected. 2026-10-19 — v2.3.1 adds a loopback-only Host check. 2026-10-19 — your real Finder drop worked; rollout done.
 
 [HIGH] could lose data or leave the service down with no quick undo (none in this plan) · [MED] changes server code, page code or the running service; undo is a revert plus a restart · [LOW] read-only checks or test-only code
 
@@ -174,6 +174,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8377/api/locat
 
 *Completed: 2026-10-19 — overlay, dialog and keyboard handling in `index.html`, plus a help-panel row. A folder rule for `~` itself is never offered.*
 
+*Note: 2026-10-19 — a real Finder drop of `~/projects/claude skills/runbook backup_v3/SKILL.md` found the path (spaces included) and showed the frontmatter warning. A long folder name pushes **Whitelist this file** onto its own row.*
+
 ### 4. Tests: server unit tests and headless drop test [LOW] [CORRECTED 2026-10-19] [DONE]
 
 **What's involved:**
@@ -289,7 +291,7 @@ Finder ──drag──▶ index.html  (overlay: "Drop to add to the whitelist")
 | Lookup returns the right path | `curl` with header and real size/mtime (item 2) | One match, correct path and flags | [DONE] |
 | Server unit tests | Repo test command (item 4) | All pass | [DONE] |
 | Headless drop test | Repo test command (item 4) | Pass | [DONE] |
-| Manual drop, one match | Drag a runbook from Finder onto `http://localhost:8377` | Overlay, then dialog with the right path | [AWAITING USER] |
+| Manual drop, one match | Drag a runbook from Finder onto `http://localhost:8377` | Overlay, then dialog with the right path | [DONE] |
 | Rule saved and list rescanned | Search rules dialog after **Whitelist folder** | New path rule; file listed without a reload | [DONE] |
 | Edge cases | Drop a covered file, a blacklisted file, an `.md` without `runbook: true`, two files | Already indexed (folder only) · blacklist warning · frontmatter warning · one-file message | [DONE — two-file case not run] |
 | Release signed and published | `git verify-tag v2.3.0` · `gh release view v2.3.0 --repo mohsinmdl/docsearch` | Good signature; release exists | [DONE — commit signed; tag unsigned] |
