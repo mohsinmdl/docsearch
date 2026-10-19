@@ -115,6 +115,10 @@ try {
      selected background as a row — and the same scroll margin when followed. */
   .folder-head, .date-head { scroll-margin-block:16px; }
   .folder-head.sel, .date-head.sel { background:var(--sel-bg); }
+  /* × on a folder heading: stop indexing that folder (shown on hover/selection). */
+  .head-x { margin-left:auto; padding:0 6px; font-family:-apple-system, BlinkMacSystemFont, sans-serif; font-size:14px; line-height:1; color:var(--text-dim); border-radius:4px; opacity:0; transition:opacity 0.12s; }
+  .folder-head:hover .head-x, .folder-head.sel .head-x { opacity:1; }
+  .head-x:hover { color:var(--text); background:var(--field-bg); }
   /* The gap below a head is the next head's top margin, which its own background
      can't reach — pull it in as a transparent bottom border (background paints to
      the border-box edge) with a negative margin so spacing stays identical and
@@ -257,6 +261,7 @@ try {
       <div class="sc-sec">Settings</div>
       <div class="sc-row"><span>Search rules (whitelist / blacklist)</span><span class="keys"><kbd>g</kbd><kbd>s</kbd></span></div>
       <div class="sc-row"><span>Whitelist a file or its folder</span><span class="keys"><span class="k-note">drag it onto the page</span></span></div>
+      <div class="sc-row"><span>Stop indexing a folder</span><span class="keys"><span class="k-note">× on its folder heading</span></span></div>
       <div class="sc-sec">Appearance</div>
       <div class="sc-row"><span>Toggle light / dark</span><span class="keys"><kbd>⌃⇧L</kbd></span></div>
       <div class="sc-row"><span>This panel</span><span class="keys"><kbd>?</kbd></span></div>
@@ -833,6 +838,80 @@ try {
       });
   }
 
+  /* × on a folder heading. If the folder is in because of whitelist rules for
+     it (the folder itself, or files dropped from it), offer to remove those;
+     a blacklist rule for the folder always works, whatever let it in. */
+  function confirmUnindex(folder, label, count) {
+    if (dropBusy) return;
+    fetch('/api/settings')
+      .then(function (r) { if (!r.ok) throw new Error('could not load rules (' + r.status + ')'); return r.json(); })
+      .then(function (doc) {
+        var own = doc.whitelist.filter(function (rule) {
+          if (rule.type !== 'path') return false;
+          if (rule.value === folder) return true;
+          // a file dropped from this folder (not a subfolder rule)
+          return /\.(html|md)$/i.test(rule.value) && rule.value.slice(0, rule.value.lastIndexOf('/')) === folder;
+        });
+        var head = el('div', 'drop-body', 'Stop indexing ');
+        head.appendChild(el('span', 'drop-path', label));
+        head.appendChild(document.createTextNode(' (' + count + (count === 1 ? ' runbook' : ' runbooks') + ')?'));
+        var nodes = [head];
+        if (own.length) {
+          nodes.push(el('div', 'drop-body', 'It was whitelisted by:'));
+          own.forEach(function (rule) { nodes.push(el('div', 'drop-path', rule.value.replace(/^\/Users\/[^/]+/, '~'))); });
+        } else {
+          nodes.push(el('div', 'drop-body', 'It’s indexed through a broader rule (like the docs folder name), so it can only be hidden with a blacklist rule.'));
+        }
+        nodes.push(el('div', 'set-msg', 'Undo anytime in Search rules (gs).'));
+        var buttons = [dropBtn('Cancel', closeDrop)];
+        buttons.push(dropBtn('Blacklist folder', function () {
+          saveRules(function (d) { d.blacklist = d.blacklist.concat([{ type: 'path', value: folder }]); },
+                    'Blacklisted ' + label + '.', folder);
+        }, !own.length));
+        if (own.length) buttons.push(dropBtn('Remove from whitelist', function () {
+          saveRules(function (d) { d.whitelist = d.whitelist.filter(function (rule) { return !own.some(function (o) { return o.type === rule.type && o.value === rule.value; }); }); },
+                    'Removed ' + label + ' from the whitelist.', folder);
+        }, true));
+        openDrop(nodes, buttons);
+      })
+      .catch(function (err) { openDrop([el('div', 'drop-body', String(err.message || err))], [dropBtn('Close', closeDrop, true)]); });
+  }
+
+  // Fetch the rules, apply `mutate`, save (the server rescans), refresh the list.
+  function saveRules(mutate, doneText, folder) {
+    if (dropBusy) return;
+    dropBusy = true;
+    var buttons = dropActsEl.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+    var status = el('div', 'set-msg', 'Saving and rescanning…');
+    dropContentEl.appendChild(status);
+    fetch('/api/settings')
+      .then(function (r) { if (!r.ok) throw new Error('could not load rules (' + r.status + ')'); return r.json(); })
+      .then(function (doc) {
+        mutate(doc);
+        return fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(doc) });
+      })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.body.ok) throw new Error(res.body.error || 'save failed');
+        settings = res.body.settings;
+        return search(qEl.value.trim(), { keepSel: true }).then(function () { return res; });
+      })
+      .then(function (res) {
+        dropBusy = false;
+        var nodes = [el('div', 'drop-body', doneText)];
+        var left = docs.filter(function (d) { return d.path.indexOf(folder + '/') === 0; }).length;
+        if (left) nodes.push(el('div', 'set-msg', left + (left === 1 ? ' runbook is' : ' runbooks are') + ' still listed through another rule; blacklist the folder to hide ' + (left === 1 ? 'it' : 'them') + '.'));
+        (res.body.warnings || []).forEach(function (w) { nodes.push(el('div', 'set-msg', w)); });
+        openDrop(nodes, [dropBtn('Done', closeDrop, true)]);
+      })
+      .catch(function (err) {
+        dropBusy = false;
+        status.textContent = String(err.message || err);
+        for (var j = 0; j < buttons.length; j++) buttons[j].disabled = false;
+      });
+  }
+
   /* Expand/collapse every heading at once — folder and date heads alike. */
   function setAllHeads(open) {
     if (open) {
@@ -982,7 +1061,16 @@ try {
     var cnt = document.createElement('span'); cnt.className = 'head-cnt';
     cnt.textContent = it.count;
     h.appendChild(car); h.appendChild(lbl); h.appendChild(cnt);
-    if (it.kind === 'folder-head') h.title = it.key; // full path on hover
+    if (it.kind === 'folder-head') {
+      h.title = it.key; // full path on hover
+      var x = document.createElement('span');
+      x.className = 'head-x';
+      x.textContent = '×';
+      x.title = 'Stop indexing this folder…';
+      x.setAttribute('role', 'button');
+      x.addEventListener('click', function (e) { e.stopPropagation(); confirmUnindex(it.key, it.label, it.count); });
+      h.appendChild(x);
+    }
     // Clicking a head puts the cursor on it too, so the mouse and the keyboard
     // leave you in the same place and ←/→/↩ carry straight on from a click.
     h.addEventListener('click', function () {
